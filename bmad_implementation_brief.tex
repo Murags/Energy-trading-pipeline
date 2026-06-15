@@ -1,0 +1,330 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{titlesec}
+
+\geometry{margin=1in}
+\setlist[itemize]{leftmargin=1.5em}
+\setlist[enumerate]{leftmargin=1.5em}
+\hypersetup{colorlinks=true, linkcolor=black, urlcolor=blue, citecolor=black}
+
+\title{BMAD Implementation Brief: German--French Day-Ahead Electricity Price Spread Forecasting with Performance-Triggered Retraining}
+\author{Mukoma Dennis Murage \\ Admission Number: 139360}
+\date{June 2026}
+
+\begin{document}
+\maketitle
+
+\section{Purpose of This Document}
+
+This document converts the approved project proposal into an implementation-oriented brief for an AI development agent using the BMAD method. It is not a replacement for the academic proposal. Instead, it provides the technical context, implementation scope, user stories, architecture assumptions, acceptance criteria, and development backlog needed to guide the build stage.
+
+\section{Project Summary}
+
+The project will develop and evaluate a DataOps pipeline for German--French day-ahead electricity price spread forecasting. The system will use an XGBoost regression model and compare three retraining strategies: no retraining, fixed-schedule retraining, and performance-triggered retraining. Performance-triggered retraining will use rolling forecast error, mainly rolling RMSE, as the decision signal.
+
+The project will use electricity market and grid data from ENTSO-E and weather data from Open-Meteo. The main target variable will be the German--French day-ahead price spread, calculated as the German day-ahead electricity price minus the French day-ahead electricity price for each hourly delivery period. The expected implementation will cover data acquisition, preprocessing, feature engineering, model training, backtesting, retraining logic, logging, evaluation, and a simple monitoring dashboard.
+
+\section{Implementation Objectives}
+
+\begin{enumerate}
+    \item Build a reproducible data pipeline for collecting and preparing ENTSO-E and Open-Meteo data.
+    \item Train an XGBoost forecasting model for hourly German--French day-ahead price spreads.
+    \item Implement historical backtesting for three retraining strategies.
+    \item Implement rolling RMSE monitoring and performance-triggered retraining logic.
+    \item Build a simple monitoring dashboard showing forecasts, actual spreads, RMSE, retraining events, and strategy comparison results.
+    \item Produce logs and evaluation outputs that support reproducibility and academic reporting.
+\end{enumerate}
+
+\section{Out of Scope}
+
+\begin{itemize}
+    \item Real-money trading simulation or profit-and-loss analysis.
+    \item Intraday or balancing market forecasting.
+    \item Model architecture comparison beyond XGBoost.
+    \item Formal uncertainty quantification such as conformal prediction.
+    \item Bidding zones outside Germany and France.
+    \item Enterprise-scale deployment using expensive managed services such as SageMaker or managed Airflow.
+\end{itemize}
+
+\section{Primary Users}
+
+\subsection{Analyst / Forecaster}
+
+The analyst or forecaster is the main user. This user will not manually ingest data. Data ingestion will be automated by the pipeline. The user will interact mainly with the dashboard to view forecast outputs, actual price spreads, rolling RMSE, retraining events, model versions, and strategy comparison results.
+
+\section{System Components}
+
+\begin{longtable}{p{0.28\textwidth} p{0.62\textwidth}}
+\hline
+\textbf{Component} & \textbf{Responsibility} \\
+\hline
+DataSource & Represents ENTSO-E and Open-Meteo as external data providers. \\
+DataIngestionService & Retrieves market, grid, and weather data from external APIs or downloaded datasets. \\
+PreprocessingService & Cleans, aligns, and standardises hourly data, including timestamp handling and missing-value treatment. \\
+FeatureDataset & Stores processed features used for training, forecasting, and backtesting. \\
+ForecastModel & Wraps the XGBoost regression model used to forecast the price spread. \\
+ModelTrainer & Trains and retrains the XGBoost model using defined training windows. \\
+ForecastService & Generates hourly day-ahead spread forecasts. \\
+PerformanceMonitor & Calculates error metrics such as RMSE, MAE, and rolling RMSE. \\
+RetrainingPolicy & Encapsulates no-retraining, fixed-schedule, and performance-triggered retraining logic. \\
+ModelRegistry & Stores model version metadata, training periods, parameters, and validation metrics. \\
+EvaluationService & Compares retraining strategies using historical backtesting. \\
+Dashboard & Presents forecasts, actual spreads, rolling RMSE, retraining events, and strategy comparison outputs. \\
+\hline
+\end{longtable}
+
+\section{Data Requirements}
+
+\subsection{ENTSO-E Data}
+
+The implementation should support collection or ingestion of the following data for Germany and France where available:
+
+\begin{itemize}
+    \item Day-ahead electricity prices.
+    \item Load or demand data.
+    \item Generation-related variables, where available.
+\end{itemize}
+
+\subsection{Open-Meteo Data}
+
+The implementation should support weather variables relevant to short-term electricity price forecasting, including:
+
+\begin{itemize}
+    \item Temperature.
+    \item Wind speed.
+    \item Solar irradiance or solar-related variables.
+\end{itemize}
+
+\subsection{Target Variable}
+
+For each hourly delivery period:
+
+\[
+\text{Spread}_{t} = \text{Price}_{Germany,t} - \text{Price}_{France,t}
+\]
+
+The spread should be the model target during training and the output during forecasting.
+
+\section{Data Processing Requirements}
+
+The system will:
+
+\begin{enumerate}
+    \item Standardise timestamps across ENTSO-E and Open-Meteo data.
+    \item Align market, grid, and weather records to the same hourly delivery periods.
+    \item Handle missing values, duplicate records, inconsistent timestamps, and daylight-saving-time changes.
+    \item Create engineered features such as lagged spreads, lagged prices, rolling averages, calendar variables, weather predictors, and grid-based predictors.
+    \item Store raw and processed datasets in a reproducible format, preferably Parquet.
+\end{enumerate}
+
+\section{Model Requirements}
+
+\begin{itemize}
+    \item The forecasting model will be an XGBoost regressor.
+    \item The model will predict hourly German--French day-ahead price spreads.
+    \item The same model configuration should be used across all retraining strategies after tuning.
+    \item Model parameters may include learning rate, maximum tree depth, number of estimators, subsampling ratio, and regularisation terms.
+    \item Evaluation metrics should include RMSE, MAE, and retraining frequency.
+\end{itemize}
+
+\section{Retraining Strategies}
+
+\subsection{Strategy 1: No Retraining}
+
+The model will be trained once at the start of the evaluation period and kept fixed throughout the backtest. This will act as the static baseline.
+
+\subsection{Strategy 2: Fixed-Schedule Retraining}
+
+The model will be retrained at a predefined interval, such as weekly. This will act as the scheduled retraining comparator.
+
+\subsection{Strategy 3: Performance-Triggered Retraining}
+
+The model will be retrained only when rolling forecast error exceeds a defined threshold. The main monitoring metric will be rolling RMSE. The threshold should be configurable and recorded in the experiment logs.
+
+\section{Backtesting Requirements}
+
+The backtesting framework will simulate how the model would have performed over time under each retraining strategy. The backtest should:
+
+\begin{enumerate}
+    \item Use the same data, feature set, and model type across all strategies.
+    \item Avoid look-ahead bias by ensuring future values are not used during training or prediction.
+    \item Log forecasts, actual values, prediction errors, rolling RMSE, model versions, and retraining events.
+    \item Compare strategies using RMSE, MAE, retraining frequency, and optional directional accuracy.
+    \item Export results in tables and plots suitable for the final project report.
+\end{enumerate}
+
+\section{Dashboard Requirements}
+
+The dashboard will provide a user-facing view of the system outputs. It should show:
+
+\begin{itemize}
+    \item German--French day-ahead price spread forecasts.
+    \item Actual price spreads after actual values are available.
+    \item RMSE, MAE, and rolling RMSE.
+    \item Retraining events and model version changes.
+    \item Comparison of no retraining, fixed-schedule retraining, and performance-triggered retraining.
+\end{itemize}
+
+The dashboard may be implemented as a lightweight Streamlit application, static report, or notebook-based dashboard, depending on time and deployment constraints.
+
+\section{Cost-Conscious Architecture}
+
+The implementation should remain lightweight and suitable for a student project. Heavy training and historical backtesting may be performed locally or in a notebook environment. AWS services should be used only where they support reproducibility, storage, scheduling, or demonstration of deployability.
+
+\begin{itemize}
+    \item Amazon S3 may store raw data, processed data, model artefacts, logs, and evaluation results.
+    \item AWS Lambda may run small scheduled ingestion or monitoring tasks.
+    \item EventBridge may trigger scheduled tasks.
+    \item CloudWatch may provide basic logging.
+    \item Terraform may define cloud resources for reproducibility.
+\end{itemize}
+
+\section{Suggested Repository Structure}
+
+\begin{verbatim}
+project-root/
+  README.md
+  requirements.txt
+  pyproject.toml
+  .env.example
+  data/
+    raw/
+    processed/
+    features/
+  notebooks/
+  src/
+    config/
+    data_ingestion/
+    preprocessing/
+    features/
+    models/
+    backtesting/
+    monitoring/
+    retraining/
+    evaluation/
+    dashboard/
+    utils/
+  infrastructure/
+    terraform/
+  reports/
+    figures/
+    tables/
+  tests/
+\end{verbatim}
+
+\section{BMAD-Ready Epic Breakdown}
+
+\subsection{Epic 1: Data Pipeline}
+
+\textbf{Goal:} Build a reproducible data acquisition and preprocessing pipeline.
+
+\begin{itemize}
+    \item Story 1.1: As a developer, I want to fetch or load ENTSO-E market data so that German and French price data can be used for modelling.
+    \item Story 1.2: As a developer, I want to fetch or load Open-Meteo weather data so that weather predictors can be added to the feature set.
+    \item Story 1.3: As a developer, I want to clean and align all datasets to hourly timestamps so that model inputs are consistent.
+    \item Story 1.4: As a developer, I want to generate lag, rolling, weather, grid, and calendar features so that the model can learn temporal and market patterns.
+\end{itemize}
+
+\subsection{Epic 2: Forecasting Model}
+
+\textbf{Goal:} Train and validate an XGBoost model for price spread forecasting.
+
+\begin{itemize}
+    \item Story 2.1: As a developer, I want to train an XGBoost regressor so that hourly price spreads can be predicted.
+    \item Story 2.2: As a developer, I want to tune model parameters so that the baseline model is reasonably stable.
+    \item Story 2.3: As a developer, I want to save model artefacts and metadata so that model versions can be tracked.
+\end{itemize}
+
+\subsection{Epic 3: Backtesting and Retraining}
+
+\textbf{Goal:} Compare no retraining, fixed-schedule retraining, and performance-triggered retraining.
+
+\begin{itemize}
+    \item Story 3.1: As a researcher, I want a no-retraining baseline so that static model degradation can be observed.
+    \item Story 3.2: As a researcher, I want weekly fixed-schedule retraining so that scheduled retraining can be compared.
+    \item Story 3.3: As a researcher, I want rolling RMSE monitoring so that model performance deterioration can be detected.
+    \item Story 3.4: As a researcher, I want performance-triggered retraining so that retraining occurs only when the error threshold is exceeded.
+    \item Story 3.5: As a researcher, I want logs of retraining events so that retraining frequency can be compared.
+\end{itemize}
+
+\subsection{Epic 4: Evaluation and Reporting}
+
+\textbf{Goal:} Produce outputs required for academic analysis.
+
+\begin{itemize}
+    \item Story 4.1: As a researcher, I want RMSE and MAE for each strategy so that forecast accuracy can be compared.
+    \item Story 4.2: As a researcher, I want retraining counts for each strategy so that maintenance effort can be compared.
+    \item Story 4.3: As a researcher, I want plots and tables so that results can be included in the final report.
+\end{itemize}
+
+\subsection{Epic 5: Monitoring Dashboard}
+
+\textbf{Goal:} Provide a simple interface for viewing forecasts and monitoring outputs.
+
+\begin{itemize}
+    \item Story 5.1: As an analyst, I want to view forecasted and actual spreads so that I can inspect model behaviour.
+    \item Story 5.2: As an analyst, I want to view rolling RMSE so that I can understand model degradation over time.
+    \item Story 5.3: As an analyst, I want to view retraining events so that I can see when and why models were updated.
+    \item Story 5.4: As an analyst, I want to compare strategy outputs so that I can interpret the final evaluation.
+\end{itemize}
+
+\section{Acceptance Criteria}
+
+\begin{itemize}
+    \item The system can load or fetch required ENTSO-E and Open-Meteo data.
+    \item The system can produce a cleaned and aligned hourly feature dataset.
+    \item The system can train an XGBoost model and generate hourly spread forecasts.
+    \item The system can run a historical backtest for all three retraining strategies.
+    \item The system logs forecasts, actual values, errors, rolling RMSE, model versions, and retraining events.
+    \item The system produces comparison metrics for RMSE, MAE, and retraining frequency.
+    \item The dashboard or report displays forecast outputs, actual spreads, RMSE, retraining events, and strategy comparison results.
+    \item The implementation is documented well enough for reproduction.
+\end{itemize}
+
+\section{Risks and Mitigations}
+
+\begin{longtable}{p{0.3\textwidth} p{0.6\textwidth}}
+\hline
+\textbf{Risk} & \textbf{Mitigation} \\
+\hline
+ENTSO-E data gaps or API issues & Cache downloaded data, document missing periods, and design loaders to accept local CSV or Parquet files. \\
+Open-Meteo variable mismatch & Define a minimal set of weather variables and allow feature generation to skip unavailable fields. \\
+Backtesting takes too long & Start with smaller date ranges, profile bottlenecks, then scale to the full period. \\
+Threshold sensitivity & Make thresholds configurable and report sensitivity in the analysis. \\
+Cloud cost escalation & Keep training and backtesting local or notebook-based; use cloud mainly for storage and lightweight scheduling. \\
+Dashboard over-scope & Build a simple dashboard focused on forecasts, RMSE, retraining events, and strategy comparison. \\
+\hline
+\end{longtable}
+
+\section{Implementation Sequence}
+
+\begin{enumerate}
+    \item Set up repository, environment, configuration files, and project documentation.
+    \item Implement data loaders for ENTSO-E and Open-Meteo.
+    \item Implement data cleaning, alignment, and feature generation.
+    \item Train the initial XGBoost forecasting model.
+    \item Implement forecast logging and actual-value matching.
+    \item Implement rolling RMSE and evaluation metrics.
+    \item Implement no-retraining, fixed-schedule, and performance-triggered retraining strategies.
+    \item Run historical backtesting and export results.
+    \item Build the monitoring dashboard or report interface.
+    \item Finalise documentation, diagrams, and reproducibility instructions.
+\end{enumerate}
+
+\section{Expected Final Deliverables}
+
+\begin{enumerate}
+    \item A retraining pipeline prototype for German--French day-ahead price spread forecasting.
+    \item A monitoring dashboard showing price spreads, rolling RMSE, retraining events, and comparison results.
+    \item System documentation covering design, implementation, tools, evaluation, and reproduction steps.
+\end{enumerate}
+
+\end{document}
