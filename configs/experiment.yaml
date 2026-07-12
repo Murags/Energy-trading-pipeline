@@ -1,6 +1,7 @@
 data:
-  price_de_path: data/raw/entsoe/prices/de.csv
-  price_fr_path: data/raw/entsoe/prices/fr.csv
+  target_column: spread
+  timestamp_column: timestamp
+  input_format: csv
 dates:
   start_date: "2023-01-01"
   end_date: "2023-01-08"
