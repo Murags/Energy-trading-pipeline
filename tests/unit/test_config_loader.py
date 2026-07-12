@@ -150,7 +150,9 @@ def test_repository_sample_configs_load_with_debug_safe_defaults():
         model_params_config_path=PROJECT_ROOT / "configs" / "model_params.yaml",
         base_dir=PROJECT_ROOT,
     )
-    fixture_config = load_config(PROJECT_ROOT / "tests" / "fixtures" / "sample_config.yaml")
+    fixture_config = load_config(
+        PROJECT_ROOT / "tests" / "fixtures" / "sample_config.yaml"
+    )
 
     assert config["retraining"]["strategy"] == "fixed_schedule"
     assert config["retraining"]["fixed_schedule_interval_days"] == 7
