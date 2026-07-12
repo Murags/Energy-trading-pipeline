@@ -44,8 +44,8 @@ This addendum stores implementation details that inform downstream architecture 
 ```text
 project-root/
   README.md
-  requirements.txt
   pyproject.toml
+  uv.lock
   .env.example
   data/
     raw/

@@ -151,9 +151,9 @@ Use this structure when creating each epic tracking issue:
 
 - Epic title: Project Setup and Configuration Foundation
 - Epic goal: Establish the local-first Python project skeleton, dependency baseline, configuration structure, CLI entry point, and fixture-based test foundation.
-- Scope: Repository structure, Python package layout, `pyproject.toml`, `requirements.txt`, `.env.example`, `configs/`, initial CLI, config loader, path resolver, and test fixture scaffolding.
+- Scope: Repository structure, Python package layout, `pyproject.toml`, `uv.lock`, `.env.example`, `configs/`, initial CLI, config loader, path resolver, and test fixture scaffolding.
 - Out of scope: Data ingestion logic, modelling, backtesting, dashboard, Docker, GitHub Actions, AWS, and academic report content.
-- Key architecture modules/files: `pyproject.toml`, `requirements.txt`, `.env.example`, `configs/experiment.yaml`, `configs/local_paths.yaml`, `configs/model_params.yaml`, `src/energy_trading_pipeline/cli.py`, `src/energy_trading_pipeline/config/loader.py`, `src/energy_trading_pipeline/config/schema.py`, `src/energy_trading_pipeline/config/paths.py`, `tests/fixtures/`.
+- Key architecture modules/files: `pyproject.toml`, `uv.lock`, `.env.example`, `configs/experiment.yaml`, `configs/local_paths.yaml`, `configs/model_params.yaml`, `src/energy_trading_pipeline/cli.py`, `src/energy_trading_pipeline/config/loader.py`, `src/energy_trading_pipeline/config/schema.py`, `src/energy_trading_pipeline/config/paths.py`, `tests/fixtures/`.
 - Dependencies: Approved PRD and architecture.
 - Acceptance criteria: Project skeleton matches the approved architecture, dependencies install in a local virtual environment, config files can be loaded from CLI, path resolution works without external credentials, initial tests run against fixtures.
 
@@ -172,10 +172,10 @@ Use this structure when creating each epic tracking issue:
 ### Story 1.2: Define Dependency and Environment Files
 
 - User story: As a developer, I want dependency and environment files so that the project can be installed reproducibly in a local Python environment.
-- Description: Add `pyproject.toml`, `requirements.txt`, `.env.example`, and initial dependency groups for core, dashboard, test, and optional AWS tooling.
-- Acceptance criteria: Python 3.11+ is declared, core dependencies include pandas, NumPy, scikit-learn, XGBoost, PyArrow, Matplotlib/Plotly, PyYAML, pytest; `.env.example` contains placeholder ENTSO-E and AWS variables only; no secrets are committed.
-- Technical notes: Pin or constrain versions during implementation setup; keep AWS dependencies optional.
-- Files/modules likely affected: `pyproject.toml`, `requirements.txt`, `.env.example`.
+- Description: Add `pyproject.toml`, `uv.lock`, `.env.example`, and initial dependency groups for core, dashboard, test, and optional AWS tooling, managed with `uv`.
+- Acceptance criteria: Python 3.11+ is declared, core dependencies include pandas, NumPy, scikit-learn, XGBoost, PyArrow, Matplotlib/Plotly, PyYAML, pytest; `uv.lock` is committed and in sync with `pyproject.toml`; `.env.example` contains placeholder ENTSO-E and AWS variables only; no secrets are committed.
+- Technical notes: Pin or constrain versions during implementation setup using `uv add`/`uv lock`; keep AWS dependencies optional; do not introduce a `requirements.txt`.
+- Files/modules likely affected: `pyproject.toml`, `uv.lock`, `.env.example`.
 - Testing requirements: Create a smoke test that imports the package after dependency installation.
 - Dependencies: Story 1.1.
 - Suggested priority: P0

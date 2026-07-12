@@ -32,19 +32,19 @@ As a developer, I want dependency and environment files so that the project can 
 
 ## Description
 
-Add `pyproject.toml`, `requirements.txt`, `.env.example`, and initial dependency groups for core, dashboard, test, and optional AWS tooling.
+Add `pyproject.toml`, `uv.lock`, `.env.example`, and initial dependency groups for core, dashboard, test, and optional AWS tooling, managed with `uv`.
 
 ## Acceptance Criteria
 
-Python 3.11+ is declared, core dependencies include pandas, NumPy, scikit-learn, XGBoost, PyArrow, Matplotlib/Plotly, PyYAML, pytest; `.env.example` contains placeholder ENTSO-E and AWS variables only; no secrets are committed.
+Python 3.11+ is declared, core dependencies include pandas, NumPy, scikit-learn, XGBoost, PyArrow, Matplotlib/Plotly, PyYAML, pytest; `uv.lock` is committed and in sync with `pyproject.toml`; `.env.example` contains placeholder ENTSO-E and AWS variables only; no secrets are committed.
 
 ## Technical Notes
 
-Pin or constrain versions during implementation setup; keep AWS dependencies optional.
+Pin or constrain versions during implementation setup using `uv add`/`uv lock`; keep AWS dependencies optional. Do not introduce a `requirements.txt` — `pyproject.toml` plus `uv.lock` is the canonical dependency source (see `AGENTS.md` Dependency Management Rules).
 
 ## Files / Modules Likely Affected
 
-`pyproject.toml`, `requirements.txt`, `.env.example`.
+`pyproject.toml`, `uv.lock`, `.env.example`.
 
 ## Testing Requirements
 
