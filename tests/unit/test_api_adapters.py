@@ -1,7 +1,6 @@
 """Unit tests for optional external API adapter interfaces."""
 
 import logging
-from pathlib import Path
 
 import pandas as pd
 import pytest
