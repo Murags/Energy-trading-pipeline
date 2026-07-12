@@ -147,7 +147,7 @@ No external starter CLI is required. Initialize the repository using standard Py
 python3.11 -m venv .venv
 ```
 
-Dependency and packaging setup should be captured in `pyproject.toml` and/or `requirements.txt`.
+Dependency and packaging setup should be captured in `pyproject.toml`, managed with `uv`, with `uv.lock` committed as the lockfile.
 
 **Architectural Decisions Provided by Starter:**
 
@@ -294,7 +294,7 @@ AWS must not become required for local reproducibility.
 
 **Implementation Sequence:**
 
-1. Define repository structure, `pyproject.toml` and/or `requirements.txt`, `.env.example`, and YAML config schema.
+1. Define repository structure, `pyproject.toml` (managed with `uv`, `uv.lock` committed), `.env.example`, and YAML config schema.
 2. Implement config loading and path resolution.
 3. Implement local CSV/Parquet data loading.
 4. Implement raw and processed artifact layout.
@@ -495,7 +495,7 @@ Logs should include:
 Energy-trading-pipeline/
   README.md
   pyproject.toml
-  requirements.txt
+  uv.lock
   .env.example
   .gitignore
 
@@ -834,7 +834,7 @@ The main pipeline is CLI-driven. Streamlit runs separately and reads exported ar
 
 **Build Process Structure:**
 
-No complex build process is required. Python packaging and dependency installation are handled through `pyproject.toml` and/or `requirements.txt`.
+No complex build process is required. Python packaging and dependency installation are handled through `pyproject.toml` and `uv` (`uv sync`), with `uv.lock` committed for reproducibility.
 
 **Deployment Structure:**
 
@@ -930,7 +930,7 @@ Coverage examples:
 
 **Decision Completeness:**
 
-Critical implementation decisions are documented. Some exact dependency versions are intentionally not pinned in the architecture; they should be pinned during environment setup in `requirements.txt` or `pyproject.toml`.
+Critical implementation decisions are documented. Some exact dependency versions are intentionally not pinned in the architecture; they should be pinned during environment setup in `pyproject.toml` and locked via `uv.lock`.
 
 **Structure Completeness:**
 

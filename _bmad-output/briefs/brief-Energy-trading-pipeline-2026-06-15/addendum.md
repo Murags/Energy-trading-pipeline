@@ -24,8 +24,8 @@ This addendum preserves implementation details from the source brief that are us
 ```text
 project-root/
   README.md
-  requirements.txt
   pyproject.toml
+  uv.lock
   .env.example
   data/
     raw/

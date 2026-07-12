@@ -217,6 +217,21 @@ Use these names consistently across preprocessing, features, modelling, backtest
 
 ---
 
+## Dependency Management Rules
+
+This project uses [`uv`](https://docs.astral.sh/uv/) as the Python package and environment manager.
+
+Rules:
+
+* `pyproject.toml` is the single source of truth for dependencies (core, dashboard, test, and optional AWS groups).
+* `uv.lock` is the committed lockfile and must be kept in sync with `pyproject.toml`.
+* Do not create or maintain a `requirements.txt`. It is redundant with `uv.lock` and must not be reintroduced as a second source of truth.
+* Use `uv venv --python 3.11` (or newer) to create the local environment, `uv sync` to install dependencies, and `uv run <command>` (e.g. `uv run pytest`) to execute tools inside that environment.
+* If a downstream tool strictly requires a `requirements.txt` (e.g. a constrained deployment target), generate it on demand with `uv export` rather than hand-maintaining one.
+* Do not add new dependencies without a clear need; keep AWS and dashboard dependency groups optional per `docs/CODING_STYLE.md`.
+
+---
+
 ## Configuration Rules
 
 YAML is the canonical configuration format.
