@@ -9,7 +9,10 @@ from energy_trading_pipeline.config.paths import (
     get_default_base_dir,
     resolve_paths_config,
 )
-from energy_trading_pipeline.config.schema import validate_experiment_config
+from energy_trading_pipeline.config.schema import (
+    ConfigValidationError,
+    validate_experiment_config,
+)
 
 
 def load_yaml_file(config_path: Path) -> dict[str, Any]:
@@ -51,8 +54,11 @@ def load_config(
     `model_params_config_path` is merged into `model.params`.
 
     Raises:
-        ConfigValidationError: If the experiment config fails validation.
+        ConfigValidationError: If the experiment config fails validation, or if
+            its `model` section is not a mapping when merging model params.
         FileNotFoundError: If any provided config file does not exist.
+        ValueError: If any provided config file's top-level content is not a
+            YAML mapping.
     """
     config = load_yaml_file(experiment_config_path)
     validate_experiment_config(config)
@@ -67,6 +73,11 @@ def load_config(
 
     if model_params_config_path is not None:
         model_params = load_yaml_file(model_params_config_path)
-        config["model"] = {**config.get("model", {}), "params": model_params}
+        existing_model_config = config.get("model", {})
+        if not isinstance(existing_model_config, dict):
+            raise ConfigValidationError(
+                "Config section 'model' must be a mapping to merge model params."
+            )
+        config["model"] = {**existing_model_config, "params": model_params}
 
     return config

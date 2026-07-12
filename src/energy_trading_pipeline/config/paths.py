@@ -2,13 +2,23 @@
 
 from pathlib import Path
 
+# Fallback if no `pyproject.toml` is found above this file (e.g. installed package).
 # config/paths.py -> config -> energy_trading_pipeline -> src -> repo root
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+_FALLBACK_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def get_default_base_dir() -> Path:
-    """Return the repository root used to resolve relative config paths."""
-    return _REPO_ROOT
+    """
+    Return the repository root used to resolve relative config paths.
+
+    Walks up from this file's location looking for a directory containing
+    `pyproject.toml`. Falls back to the conventional `src/` layout root if
+    no `pyproject.toml` is found (e.g. when running from an installed package).
+    """
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / "pyproject.toml").is_file():
+            return candidate
+    return _FALLBACK_REPO_ROOT
 
 
 def resolve_path(base_dir: Path, relative_path: str) -> Path:

@@ -95,6 +95,19 @@ def test_load_config_raises_on_invalid_date_order(tmp_path):
         load_config(experiment_path)
 
 
+def test_load_config_raises_clear_error_when_model_section_is_not_a_mapping(
+    tmp_path,
+):
+    experiment_path = _write(
+        tmp_path / "experiment.yaml",
+        VALID_EXPERIMENT_CONFIG.replace("model:\n  type: xgboost", "model: xgboost"),
+    )
+    model_params_path = _write(tmp_path / "model_params.yaml", MODEL_PARAMS_CONFIG)
+
+    with pytest.raises(ConfigValidationError, match="model"):
+        load_config(experiment_path, model_params_config_path=model_params_path)
+
+
 def test_load_config_raises_file_not_found_for_missing_experiment_config(tmp_path):
     missing_path = tmp_path / "does_not_exist.yaml"
 
