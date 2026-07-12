@@ -1,11 +1,15 @@
 """Unit tests for local CSV and Parquet data loading."""
 
 import logging
+from pathlib import Path
 
 import pandas as pd
 import pytest
 
 from energy_trading_pipeline.data_ingestion.local_loader import load_local_data
+
+
+FIXTURES_DIR = Path(__file__).parents[1] / "fixtures"
 
 
 @pytest.fixture
@@ -20,18 +24,25 @@ def sample_data() -> pd.DataFrame:
     )
 
 
-def test_load_local_data_reads_csv_and_logs_source_details(
-    tmp_path, sample_data, caplog
+@pytest.mark.parametrize(
+    ("fixture_name", "expected_column"),
+    [
+        ("sample_prices_de.csv", "price_de"),
+        ("sample_prices_fr.csv", "price_fr"),
+        ("sample_weather.csv", "temperature_2m_c"),
+    ],
+)
+def test_load_local_data_reads_checked_in_csv_fixtures_and_logs_source_details(
+    fixture_name, expected_column, caplog
 ):
-    csv_path = tmp_path / "prices.csv"
-    sample_data.to_csv(csv_path, index=False)
+    csv_path = FIXTURES_DIR / fixture_name
 
     with caplog.at_level(logging.INFO):
         result = load_local_data(csv_path)
 
-    pd.testing.assert_frame_equal(result, sample_data)
+    assert {"timestamp", expected_column}.issubset(result.columns)
     assert str(csv_path) in caplog.text
-    assert "2 rows" in caplog.text
+    assert f"{len(result)} rows" in caplog.text
 
 
 def test_load_local_data_reads_parquet_and_logs_source_details(

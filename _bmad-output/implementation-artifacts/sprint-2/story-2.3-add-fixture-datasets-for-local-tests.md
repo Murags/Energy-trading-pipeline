@@ -1,18 +1,19 @@
 ---
 story_id: "2.3"
 title: "Add Fixture Datasets for Local Tests"
-status: "Ready for Dev"
+status: "review"
 parent_epic: "Epic 2: Local Data Loading and Artifact Handling"
 priority: "P0"
 suggested_sprint: "Sprint 2"
 source: "_bmad-output/epics.md"
+baseline_commit: "7b943a5140431087cba7aa2d55b7fac4fb25e82d"
 ---
 
 # Story 2.3: Add Fixture Datasets for Local Tests
 
 ## Status
 
-Ready for Dev
+Review
 
 ## Parent Epic
 
@@ -70,6 +71,49 @@ Story 2.1.
 - Add or update tests listed in the testing requirements.
 - Do not require external credentials unless the story explicitly concerns optional external integration.
 - Do not run full 2020-2025 experiments for story verification unless explicitly required.
+
+## Tasks / Subtasks
+
+- [x] Add compact synthetic German price, French price, and weather CSV fixtures with hourly timestamps.
+- [x] Include documented missing-value and duplicate-timestamp cases for later validation tests.
+- [x] Update the fixture configuration to reference the checked-in local datasets.
+- [x] Update loader tests to consume and validate the checked-in fixtures.
+- [x] Run the full fixture-based regression suite and configured code-quality checks.
+
+## Dev Agent Record
+
+### Implementation Plan
+
+- Define an eight-day hourly synthetic dataset contract using canonical price columns and representative weather columns.
+- Include one duplicate timestamp and one missing weather value without adding preprocessing behavior from future stories.
+- Point the test configuration and local-loader coverage at the committed fixtures, then verify the full suite.
+
+### Debug Log
+
+- Confirmed the focused tests failed because the three planned CSV fixture files did not yet exist.
+- Used `UV_CACHE_DIR=/tmp/energy-trading-pipeline-uv-cache` because the default uv cache is outside the workspace sandbox.
+
+### Completion Notes
+
+- Added eight days (192 unique hourly timestamps) of deterministic synthetic German price, French price, and weather data.
+- Added one duplicate German-price timestamp and one missing weather temperature for future validation tests.
+- Updated the sample configuration and local-loader tests to consume the committed fixtures directly.
+- Added fixture contract tests for schemas, hourly continuity, small date range, and validation cases.
+- Full regression suite passed: 66 tests. Compilation and whitespace validation also passed.
+
+## File List
+
+- `_bmad-output/implementation-artifacts/sprint-2/story-2.3-add-fixture-datasets-for-local-tests.md`
+- `tests/fixtures/sample_config.yaml`
+- `tests/fixtures/sample_prices_de.csv`
+- `tests/fixtures/sample_prices_fr.csv`
+- `tests/fixtures/sample_weather.csv`
+- `tests/unit/test_fixture_datasets.py`
+- `tests/unit/test_local_loader.py`
+
+## Change Log
+
+- 2026-07-13: Added compact synthetic local dataset fixtures with validation cases and loader/contract coverage; status set to review.
 
 ## QA Checklist
 
