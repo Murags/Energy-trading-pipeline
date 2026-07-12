@@ -1,6 +1,7 @@
 data:
-  price_de_path: data/raw/entsoe/prices/de.csv
-  price_fr_path: data/raw/entsoe/prices/fr.csv
+  price_de_path: tests/fixtures/sample_prices_de.csv
+  price_fr_path: tests/fixtures/sample_prices_fr.csv
+  weather_path: tests/fixtures/sample_weather.csv
 dates:
   start_date: "2023-01-01"
   end_date: "2023-01-08"
