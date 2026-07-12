@@ -39,6 +39,8 @@ n_estimators: 200
 max_depth: 5
 """
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 def _write(path: Path, content: str) -> Path:
     path.write_text(content)
@@ -139,3 +141,35 @@ def test_load_yaml_file_returns_empty_dict_for_empty_file(tmp_path):
     path = _write(tmp_path / "empty.yaml", "")
 
     assert load_yaml_file(path) == {}
+
+
+def test_repository_sample_configs_load_with_debug_safe_defaults():
+    config = load_config(
+        PROJECT_ROOT / "configs" / "experiment.yaml",
+        local_paths_config_path=PROJECT_ROOT / "configs" / "local_paths.yaml",
+        model_params_config_path=PROJECT_ROOT / "configs" / "model_params.yaml",
+        base_dir=PROJECT_ROOT,
+    )
+    fixture_config = load_config(PROJECT_ROOT / "tests" / "fixtures" / "sample_config.yaml")
+
+    assert config["retraining"]["strategy"] == "fixed_schedule"
+    assert config["retraining"]["fixed_schedule_interval_days"] == 7
+    assert config["retraining"]["rolling_rmse_window_days"] == 7
+    assert config["retraining"]["rolling_rmse_threshold"] == 10.0
+    assert config["paths"]["price_de_csv_path"] == (
+        PROJECT_ROOT / "data" / "raw" / "entsoe" / "prices" / "price_de.csv"
+    ).resolve()
+    assert config["paths"]["processed_data_parquet_path"] == (
+        PROJECT_ROOT / "data" / "processed" / "prices.parquet"
+    ).resolve()
+    assert config["model"]["params"]["n_estimators"] == 100
+    assert fixture_config["dates"] == {
+        "start_date": "2023-01-01",
+        "end_date": "2023-01-08",
+    }
+    assert fixture_config["retraining"] == {
+        "strategy": "fixed_schedule",
+        "fixed_schedule_interval_days": 7,
+        "rolling_rmse_window_days": 7,
+        "rolling_rmse_threshold": 10.0,
+    }

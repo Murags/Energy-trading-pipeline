@@ -1,7 +1,8 @@
 ---
 story_id: "1.5"
 title: "Create Sample Experiment Configuration"
-status: "Ready for Dev"
+status: "review"
+baseline_commit: "f5c770478c09a9f6fe0c5b0f897e3bd70ce25203"
 parent_epic: "Epic 1: Project Setup and Configuration Foundation"
 priority: "P0"
 suggested_sprint: "Sprint 1"
@@ -12,7 +13,7 @@ source: "_bmad-output/epics.md"
 
 ## Status
 
-Ready for Dev
+Review
 
 ## Parent Epic
 
@@ -73,10 +74,40 @@ Story 1.3.
 
 ## QA Checklist
 
-- [ ] Story scope matches the approved `epics.md` entry.
-- [ ] Acceptance criteria are satisfied.
-- [ ] Required tests are added or updated.
-- [ ] Tests pass on fixture/debug data where applicable.
-- [ ] No unintended dashboard, AWS, Docker, API, or modelling scope was added.
-- [ ] No secrets, tokens, credentials, or large generated datasets were committed.
-- [ ] Documentation or configuration was updated if this story changes usage or commands.
+- [x] Story scope matches the approved `epics.md` entry.
+- [x] Acceptance criteria are satisfied.
+- [x] Required tests are added or updated.
+- [x] Tests pass on fixture/debug data where applicable.
+- [x] No unintended dashboard, AWS, Docker, API, or modelling scope was added.
+- [x] No secrets, tokens, credentials, or large generated datasets were committed.
+- [x] Documentation or configuration was updated if this story changes usage or commands.
+
+## Dev Agent Record
+
+### Implementation Plan
+
+- Add repository sample YAML files compatible with the existing configuration loader.
+- Extend the fixture configuration with the same retraining defaults.
+- Verify all samples through the loader and run the full test suite.
+
+### Completion Notes
+
+- Added fixture-oriented experiment defaults with weekly fixed-schedule retraining,
+  a 7-day rolling RMSE window, and a configurable rolling RMSE threshold.
+- Added local CSV and Parquet artifact paths without credentials.
+- Added XGBoost model parameters and loader coverage for all sample configurations.
+- Verified with `uv run pytest -q` (42 passed).
+
+## File List
+
+- `_bmad-output/implementation-artifacts/sprint-1/story-1.5-create-sample-experiment-configuration.md`
+- `configs/experiment.yaml`
+- `configs/local_paths.yaml`
+- `configs/model_params.yaml`
+- `tests/fixtures/sample_config.yaml`
+- `tests/unit/test_config_loader.py`
+
+## Change Log
+
+- 2026-07-12: Created sample experiment, local-path, and model-parameter YAML
+  configurations; updated the fixture configuration and loader tests.
