@@ -6,13 +6,14 @@ parent_epic: "Epic 1: Project Setup and Configuration Foundation"
 priority: "P0"
 suggested_sprint: "Sprint 1"
 source: "_bmad-output/epics.md"
+baseline_commit: "2b02234ce7dea6b27919191889c7903d141a9ae6"
 ---
 
 # Story 1.2: Define Dependency and Environment Files
 
 ## Status
 
-Ready for Dev
+Review
 
 ## Parent Epic
 
@@ -73,10 +74,41 @@ Story 1.1.
 
 ## QA Checklist
 
-- [ ] Story scope matches the approved `epics.md` entry.
-- [ ] Acceptance criteria are satisfied.
-- [ ] Required tests are added or updated.
-- [ ] Tests pass on fixture/debug data where applicable.
-- [ ] No unintended dashboard, AWS, Docker, API, or modelling scope was added.
-- [ ] No secrets, tokens, credentials, or large generated datasets were committed.
-- [ ] Documentation or configuration was updated if this story changes usage or commands.
+- [x] Story scope matches the approved `epics.md` entry.
+- [x] Acceptance criteria are satisfied.
+- [x] Required tests are added or updated.
+- [x] Tests pass on fixture/debug data where applicable.
+- [x] No unintended dashboard, AWS, Docker, API, or modelling scope was added.
+- [x] No secrets, tokens, credentials, or large generated datasets were committed.
+- [x] Documentation or configuration was updated if this story changes usage or commands.
+
+## Dev Agent Record
+
+### Debug Log
+
+- Ran `uv lock` to generate `uv.lock` from `pyproject.toml` (70 packages resolved).
+- Ran `uv sync --extra dashboard --extra test --extra aws` to install all dependency groups locally.
+- Ran `uv run pytest -q`; initial run failed on `xgboost` import (`libomp.dylib` not found, a local macOS OpenMP runtime gap unrelated to the dependency declarations). Installed `libomp` via Homebrew; re-ran suite and all tests passed.
+
+### Completion Notes
+
+- Added `dependencies` (core) and `[project.optional-dependencies]` groups (`dashboard`, `test`, `aws`) to `pyproject.toml`, matching the allowed dependency list in `docs/CODING_STYLE.md`.
+- Core group: pandas, numpy, scikit-learn, xgboost, pyarrow, matplotlib, plotly, pyyaml.
+- `dashboard` group: streamlit. `test` group: pytest. `aws` group: boto3 (kept optional per architecture and `AGENTS.md` AWS rules).
+- Generated and committed `uv.lock`, in sync with `pyproject.toml`.
+- Updated `.env.example` with placeholder `ENTSOE_API_KEY` and `AWS_*` variables only; no real credentials.
+- Added `.env` to `.gitignore` to prevent accidental secret commits.
+- Added `tests/unit/test_dependency_smoke.py` verifying the package and all core third-party dependencies import successfully after installation, per the story's testing requirement.
+- Did not introduce `requirements.txt`, disallowed dependencies (SageMaker, Airflow, Kubernetes, Spark, MLflow, Pandera, Great Expectations), or any dashboard/AWS/Docker functional scope beyond the dependency declarations themselves.
+
+## File List
+
+- `pyproject.toml` (modified)
+- `uv.lock` (added)
+- `.env.example` (modified)
+- `.gitignore` (modified)
+- `tests/unit/test_dependency_smoke.py` (added)
+
+## Change Log
+
+- 2026-07-12: Implemented Story 1.2 — added core/dashboard/test/aws dependency groups to `pyproject.toml`, generated `uv.lock`, populated `.env.example` with ENTSO-E and AWS placeholders, gitignored `.env`, and added a dependency-installation smoke test.
