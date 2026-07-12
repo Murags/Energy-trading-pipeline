@@ -1,18 +1,19 @@
 ---
 story_id: "10.1"
 title: "Add GitHub Actions Fixture-Based CI"
-status: "Ready for Dev"
+status: "review"
 parent_epic: "Epic 10: Docker, GitHub Actions, and Reproducibility Support"
 priority: "P1"
 suggested_sprint: "Sprint 2"
 source: "_bmad-output/epics.md"
+baseline_commit: "b8ee450f4dfb29b9c4574e552457876b49ac19d6"
 ---
 
 # Story 10.1: Add GitHub Actions Fixture-Based CI
 
 ## Status
 
-Ready for Dev
+Review
 
 ## Parent Epic
 
@@ -73,10 +74,55 @@ Stories 1.2 and 1.5.
 
 ## QA Checklist
 
-- [ ] Story scope matches the approved `epics.md` entry.
-- [ ] Acceptance criteria are satisfied.
-- [ ] Required tests are added or updated.
-- [ ] Tests pass on fixture/debug data where applicable.
-- [ ] No unintended dashboard, AWS, Docker, API, or modelling scope was added.
-- [ ] No secrets, tokens, credentials, or large generated datasets were committed.
-- [ ] Documentation or configuration was updated if this story changes usage or commands.
+- [x] Story scope matches the approved `epics.md` entry.
+- [x] Acceptance criteria are satisfied.
+- [x] Required tests are added or updated.
+- [x] Tests pass on fixture/debug data where applicable.
+- [x] No unintended dashboard, AWS, Docker, API, or modelling scope was added.
+- [x] No secrets, tokens, credentials, or large generated datasets were committed.
+- [x] Documentation or configuration was updated if this story changes usage or commands.
+
+## Dev Agent Record
+
+### Implementation Plan
+
+- Add a static workflow contract test covering triggers, dependency installation,
+  fixture-safe pytest execution, and credential-free operation.
+- Add the smallest GitHub Actions workflow that installs the locked core and test
+  dependencies with `uv` and runs the current pytest suite.
+- Run the workflow contract test and full regression suite, then record the
+  verified results.
+
+### Debug Log
+
+- Confirmed the new workflow contract test failed before implementation because
+  `.github/workflows/ci.yml` did not exist.
+- Ran `UV_CACHE_DIR=/tmp/uv-cache uv sync --extra test --locked`; 70 locked
+  packages resolved successfully.
+- Ran the focused workflow contract test after implementation: 1 passed.
+- Ran the full regression suite: 73 passed in 1.70 seconds.
+- Ran `git diff --check`, verified the workflow is not ignored, and confirmed no
+  credential variables, full-history date range, or backtest command appears in CI.
+
+### Completion Notes
+
+- Added CI for pushes and pull requests on Python 3.11 using the committed
+  `uv.lock` and the project `test` dependency group.
+- CI runs the current lightweight pytest suite without ENTSO-E/AWS credentials
+  and without invoking a historical backtest.
+- Added a static workflow contract test to guard CI triggers, setup actions,
+  install/test commands, and fixture-safe scope.
+- Narrowed `.gitignore` so the CI workflow is committed while existing local
+  `.github/agents/` files remain ignored.
+
+## File List
+
+- `.github/workflows/ci.yml` (added)
+- `.gitignore` (modified)
+- `tests/unit/test_ci_workflow.py` (added)
+- `_bmad-output/implementation-artifacts/sprint-2/story-10.1-add-github-actions-fixture-based-ci.md` (modified)
+
+## Change Log
+
+- 2026-07-13: Added fixture-based GitHub Actions CI, workflow contract coverage,
+  and the narrow ignore exception required to track the workflow.

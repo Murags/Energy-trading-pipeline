@@ -1,6 +1,9 @@
 _bmad
 .opencode
-.github
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/ci.yml
 .claude
 .agents
 
