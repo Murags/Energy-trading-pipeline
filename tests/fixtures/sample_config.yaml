@@ -1,0 +1,19 @@
+data:
+  price_de_path: data/raw/entsoe/prices/de.csv
+  price_fr_path: data/raw/entsoe/prices/fr.csv
+dates:
+  start_date: "2023-01-01"
+  end_date: "2023-01-08"
+features:
+  lag_hours: [1, 24]
+model:
+  type: xgboost
+backtest:
+  train_window_days: 3
+retraining:
+  strategy: fixed_schedule
+  rolling_rmse_window_days: 7
+evaluation:
+  metrics: [rmse, mae]
+artifacts:
+  run_prefix: run

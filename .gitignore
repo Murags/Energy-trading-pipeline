@@ -13,3 +13,6 @@ __pycache__/
 
 # Environment secrets
 .env
+
+# Generated run artifacts
+logs/runs/run_*/
