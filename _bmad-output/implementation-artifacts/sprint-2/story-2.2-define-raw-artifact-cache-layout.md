@@ -92,6 +92,7 @@ Story 2.1.
 
 - Confirmed the focused test initially failed during collection because the raw-data resolver did not exist.
 - Used `UV_CACHE_DIR=/tmp/energy-trading-pipeline-uv-cache` because the default uv cache is outside the workspace sandbox.
+- Reproduced review findings for the `..` filename and missing `FileExistsError` metadata before applying fixes.
 
 ### Completion Notes
 
@@ -99,6 +100,7 @@ Story 2.1.
 - Added helpers that create the ENTSO-E prices/load/generation and Open-Meteo weather directories and resolve validated artifact filenames.
 - Added exclusive binary writes so an existing cached raw artifact raises `FileExistsError` and remains unchanged.
 - Full regression suite passed: 58 tests. Compilation and whitespace validation also passed.
+- Addressed PR review comments by rejecting special directory filenames, accepting resolved config `Path` values, and preserving filesystem exception metadata.
 
 ## File List
 
@@ -111,6 +113,7 @@ Story 2.1.
 ## Change Log
 
 - 2026-07-12: Defined the config-driven immutable raw artifact cache layout with unit coverage; status set to review.
+- 2026-07-13: Addressed four PR review comments with regression coverage.
 
 ## QA Checklist
 

@@ -32,7 +32,12 @@ def resolve_raw_artifact_path(
         raise ValueError(f"Unsupported raw artifact location: {source}/{category}")
 
     filename_path = Path(filename)
-    if not filename or filename_path.name != filename or filename_path.is_absolute():
+    if (
+        not filename
+        or filename in {".", ".."}
+        or filename_path.name != filename
+        or filename_path.is_absolute()
+    ):
         raise ValueError("Raw artifact filename must be a non-empty file name")
 
     directory = Path(raw_data_dir) / source / category
@@ -49,5 +54,5 @@ def write_raw_artifact(artifact_path: Path, content: bytes) -> Path:
             handle.write(content)
     except FileExistsError as error:
         message = f"Raw artifact already exists and is immutable: {path}"
-        raise FileExistsError(message) from error
+        raise FileExistsError(error.errno, message, error.filename) from error
     return path

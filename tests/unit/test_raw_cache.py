@@ -20,6 +20,16 @@ def test_resolve_raw_data_dir_uses_configured_path(tmp_path):
     assert raw_data_dir == (tmp_path / "custom" / "raw").resolve()
 
 
+def test_resolve_raw_data_dir_accepts_resolved_runtime_path(tmp_path):
+    configured_path = (tmp_path / "custom" / "raw").resolve()
+
+    raw_data_dir = resolve_raw_data_dir(
+        {"data_raw_dir": configured_path}, tmp_path / "unused"
+    )
+
+    assert raw_data_dir == configured_path
+
+
 def test_resolve_raw_data_dir_requires_configured_path(tmp_path):
     with pytest.raises(KeyError, match="data_raw_dir"):
         resolve_raw_data_dir({}, tmp_path)
@@ -59,7 +69,9 @@ def test_resolve_raw_artifact_path_rejects_unknown_layout_entries(
         resolve_raw_artifact_path(tmp_path, source, category, "artifact.csv")
 
 
-@pytest.mark.parametrize("filename", ["", "../artifact.csv", "nested/artifact.csv"])
+@pytest.mark.parametrize(
+    "filename", ["", ".", "..", "../artifact.csv", "nested/artifact.csv"]
+)
 def test_resolve_raw_artifact_path_rejects_invalid_filename(tmp_path, filename):
     with pytest.raises(ValueError, match="filename"):
         resolve_raw_artifact_path(tmp_path, "entsoe", "prices", filename)
@@ -78,7 +90,9 @@ def test_write_raw_artifact_does_not_overwrite_cached_file(tmp_path):
     artifact_path = tmp_path / "prices.csv"
     artifact_path.write_bytes(b"original")
 
-    with pytest.raises(FileExistsError, match="already exists"):
+    with pytest.raises(FileExistsError, match="already exists") as exc_info:
         write_raw_artifact(artifact_path, b"replacement")
 
     assert artifact_path.read_bytes() == b"original"
+    assert exc_info.value.errno is not None
+    assert Path(exc_info.value.filename) == artifact_path

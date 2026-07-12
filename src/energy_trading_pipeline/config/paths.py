@@ -21,13 +21,13 @@ def get_default_base_dir() -> Path:
     return _FALLBACK_REPO_ROOT
 
 
-def resolve_path(base_dir: Path, relative_path: str) -> Path:
+def resolve_path(base_dir: Path, relative_path: str | Path) -> Path:
     """Resolve a config-relative path against a base directory."""
     return (Path(base_dir) / relative_path).resolve()
 
 
 def resolve_paths_config(
-    paths_config: dict[str, str], base_dir: Path
+    paths_config: dict[str, str | Path], base_dir: Path
 ) -> dict[str, Path]:
     """Resolve every path value in a flat paths config mapping against base_dir."""
     return {
@@ -36,10 +36,14 @@ def resolve_paths_config(
     }
 
 
-def resolve_raw_data_dir(paths_config: dict[str, str], base_dir: Path) -> Path:
+def resolve_raw_data_dir(
+    paths_config: dict[str, str | Path], base_dir: Path
+) -> Path:
     """Resolve the configured root directory for immutable raw artifacts."""
     try:
-        raw_data_dir = paths_config["data_raw_dir"]
+        raw_data_dir = Path(paths_config["data_raw_dir"])
     except KeyError as error:
         raise KeyError("Missing required path setting: data_raw_dir") from error
+    if raw_data_dir.is_absolute():
+        return raw_data_dir.resolve()
     return resolve_path(base_dir, raw_data_dir)
