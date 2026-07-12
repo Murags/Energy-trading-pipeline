@@ -34,3 +34,12 @@ def resolve_paths_config(
         name: resolve_path(base_dir, relative_path)
         for name, relative_path in paths_config.items()
     }
+
+
+def resolve_raw_data_dir(paths_config: dict[str, str], base_dir: Path) -> Path:
+    """Resolve the configured root directory for immutable raw artifacts."""
+    try:
+        raw_data_dir = paths_config["data_raw_dir"]
+    except KeyError as error:
+        raise KeyError("Missing required path setting: data_raw_dir") from error
+    return resolve_path(base_dir, raw_data_dir)
