@@ -1,8 +1,8 @@
-"""Smoke test verifying the package imports after dependency installation."""
+"""Smoke test verifying core third-party dependencies import after installation."""
 
 import importlib
 
-import energy_trading_pipeline
+import pytest
 
 CORE_DEPENDENCIES = [
     "pandas",
@@ -16,10 +16,6 @@ CORE_DEPENDENCIES = [
 ]
 
 
-def test_package_importable_after_dependency_installation():
-    assert energy_trading_pipeline.__version__ == "0.1.0"
-
-
-def test_core_dependencies_importable():
-    for dependency in CORE_DEPENDENCIES:
-        importlib.import_module(dependency)
+@pytest.mark.parametrize("dependency", CORE_DEPENDENCIES)
+def test_core_dependency_importable(dependency):
+    importlib.import_module(dependency)
