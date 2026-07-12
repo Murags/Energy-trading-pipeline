@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from energy_trading_pipeline.cli import main
@@ -39,10 +40,7 @@ def test_cli_creates_run_directory_and_metadata_without_data_files(tmp_path, cap
 
 
 def test_cli_requires_config_argument():
-    exit_code = None
-    try:
+    with pytest.raises(SystemExit) as exc_info:
         main([])
-    except SystemExit as exc:
-        exit_code = exc.code
 
-    assert exit_code != 0
+    assert exc_info.value.code != 0
