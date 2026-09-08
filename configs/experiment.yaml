@@ -11,6 +11,12 @@ dates:
 features:
   lag_hours: [1, 24]
   rolling_window_hours: [24]
+  calendar_features: [hour, day_of_week, month, is_weekend, is_holiday]
+  holiday_dates: ["2023-01-01"]
+  weather_columns: [temperature_2m_c, wind_speed_10m_m_s, shortwave_radiation_w_m2]
+  # Grid load/generation ingestion is optional; requested columns that are
+  # unavailable warn and are excluded from the feature set.
+  grid_columns: []
 model:
   type: xgboost
   target_column: spread
