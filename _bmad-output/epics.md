@@ -9,7 +9,7 @@ created: 2026-06-18
 project_name: Energy-trading-pipeline
 github_projects_ready: true
 epic_count: 12
-story_count: 48
+story_count: 49
 ---
 
 # Energy-trading-pipeline - Implementation Epics and Stories
@@ -221,7 +221,7 @@ Use this structure when creating each epic tracking issue:
 
 - Epic title: Local Data Loading and Artifact Handling
 - Epic goal: Make local CSV/Parquet loading and artifact persistence first-class so MVP experiments do not depend on external APIs.
-- Scope: Local loaders, raw artifact layout, cached data handling, ingestion metadata, fixture datasets, and optional API adapter placeholders.
+- Scope: Local loaders, raw artifact layout, cached data handling, ingestion metadata, fixture datasets, optional API adapter placeholders, and the user-approved one-month real-price acquisition in Story 2.5.
 - Out of scope: Actual ENTSO-E/Open-Meteo API implementation, preprocessing, feature engineering, model training, and backtesting.
 - Key architecture modules/files: `src/energy_trading_pipeline/data_ingestion/local_loader.py`, `src/energy_trading_pipeline/data_ingestion/cache.py`, `src/energy_trading_pipeline/data_ingestion/entsoe_client.py`, `src/energy_trading_pipeline/data_ingestion/open_meteo_client.py`, `data/raw/`, `tests/fixtures/`.
 - Dependencies: Epic 1.
@@ -274,6 +274,18 @@ Use this structure when creating each epic tracking issue:
 - Dependencies: Story 2.2.
 - Suggested priority: P1
 - Suggested sprint: Sprint 2
+
+### Story 2.5: Acquire and Validate a Real Electricity Price Sample
+
+- User story: As a researcher, I want a real German/French price sample with verified provenance and licensing so that preprocessing can start with actual market data.
+- Description: User-approved addition on 2026-09-08. Acquire one month of published hourly day-ahead prices from SMARD, preserve source responses, and export local CSV/Parquet inputs.
+- Acceptance criteria: Both markets are downloaded without credentials; official series identities, EUR/MWh units, and CC BY 4.0 attribution are recorded; 744 hourly UTC rows per market for January 2024 pass gap, duplicate, finite-value, and pairing checks; exports load with the existing local loader.
+- Technical notes: Bounded acquisition only. `price_de` represents the Germany/Luxembourg bidding zone. Does not implement full ENTSO-E/Open-Meteo adapters, forecasting, or full historical downloads.
+- Files/modules likely affected: `data/raw/smard/prices/`, `data/processed/`, `docs/data_sources.md`, and the Story 2.5 artifact.
+- Testing requirements: Validate the real snapshot offline, including CSV/Parquet round trips. CI continues to use synthetic fixtures.
+- Dependencies: Stories 2.1 and 2.2.
+- Suggested priority: P0
+- Suggested sprint: Sprint 2, before Sprint 3 preprocessing.
 
 ## Epic 3: Data Preprocessing and Spread Calculation
 
