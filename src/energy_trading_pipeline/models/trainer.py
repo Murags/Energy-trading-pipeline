@@ -4,9 +4,20 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 import logging
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+from energy_trading_pipeline.config.paths import (
+    get_default_base_dir,
+    resolve_paths_config,
+)
+from energy_trading_pipeline.models.registry import save_model_artifacts
+from energy_trading_pipeline.models.xgboost_model import XGBoostSpreadModel
+from energy_trading_pipeline.utils.io import write_run_metadata
+from energy_trading_pipeline.utils.time import generate_run_id
 
 
 logger = logging.getLogger(__name__)
@@ -169,6 +180,103 @@ class TrainingSplit:
     target_column: str
     window: TrainingWindow
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+def train_baseline(
+    config: Mapping[str, Any], *, config_file_path: Path
+) -> dict[str, Any]:
+    """Train once from a feature Parquet, score held-out rows, and save provenance.
+
+    Requires explicit paths and model parameters in the merged config. Reads no
+    raw data and performs no feature generation, backtesting, or retraining.
+    Returns the persisted run metadata. Relative paths use the repository root.
+    """
+    paths_config = config.get("paths")
+    required_paths = ("feature_data_parquet_path", "models_dir", "logs_dir")
+    if not isinstance(paths_config, Mapping) or any(
+        not paths_config.get(key) for key in required_paths
+    ):
+        raise ValueError(
+            f"Training requires paths {list(required_paths)}; use --paths-config"
+        )
+    paths = resolve_paths_config(dict(paths_config), get_default_base_dir())
+    feature_path = paths["feature_data_parquet_path"]
+    if not feature_path.is_file():
+        raise FileNotFoundError(f"Feature dataset not found: {feature_path}")
+    model_config = config["model"]
+    if not isinstance(model_config, Mapping) or not isinstance(
+        model_config.get("params"), Mapping
+    ):
+        raise ValueError(
+            "Training requires model.params; use --model-params-config or inline params"
+        )
+    model = XGBoostSpreadModel.from_config(model_config)
+    retraining_config = config.get("retraining")
+    if not isinstance(retraining_config, Mapping) or retraining_config.get(
+        "strategy"
+    ) not in ("no_retraining", "fixed_schedule", "performance_triggered"):
+        raise ValueError("retraining.strategy must name a supported strategy")
+    strategy = retraining_config["strategy"]
+    window = TrainingWindow.from_config(config["dates"])
+    features = pd.read_parquet(feature_path)
+    # Raw same-hour prices reconstruct the target and are not valid predictors.
+    if {"price_de", "price_fr"}.intersection(features.columns):
+        raise ValueError(
+            "Feature dataset contains contemporaneous prices; use the feature artifact "
+            "without price_de and price_fr to prevent target leakage"
+        )
+    if TIMESTAMP_COLUMN not in features:
+        raise ValueError("Feature dataset is missing required column: timestamp")
+    features[TIMESTAMP_COLUMN] = pd.to_datetime(features[TIMESTAMP_COLUMN], utc=True)
+    split = select_training_window(features, window, target_column=model.target_column)
+    model.fit(split.train_features, split.train_target)
+    predictions = model.predict(split.validation_features)
+    metrics = {
+        "rmse": float(mean_squared_error(split.validation_target, predictions) ** 0.5),
+        "mae": float(mean_absolute_error(split.validation_target, predictions)),
+    }
+    run_id = generate_run_id()
+    run_dir = paths["logs_dir"] / "runs" / run_id
+    # Unlike bootstrap runs, training provenance must never overwrite another run.
+    run_dir.mkdir(parents=True, exist_ok=False)
+    model_metadata = save_model_artifacts(
+        model, paths["models_dir"], window.as_metadata(), metrics
+    )
+    metadata_path = run_dir / "run_metadata.yaml"
+    metadata = {
+        "run_id": run_id,
+        "stage": "models.baseline_training",
+        "config_file_path": str(Path(config_file_path).resolve()),
+        "config": {
+            **config,
+            "paths": {key: str(value) for key, value in paths.items()},
+        },
+        "data_date_range": {
+            "start": features[TIMESTAMP_COLUMN].min().isoformat(),
+            "end": features[TIMESTAMP_COLUMN].max().isoformat(),
+        },
+        "model_version": model_metadata["model_version"],
+        "feature_columns": split.feature_columns,
+        "target_column": split.target_column,
+        "model_parameters": model.params,
+        "strategy": strategy,
+        "training_windows": [split.metadata],
+        "evaluation_window": split.metadata["validation_range"],
+        "metrics": metrics,
+        "artifact_paths": {
+            **model_metadata["artifact_paths"],
+            "feature_dataset": str(feature_path),
+            "run_metadata": str(metadata_path),
+        },
+    }
+    write_run_metadata(run_dir, metadata)
+    logger.info(
+        "Baseline trained: run_id=%s model_version=%s rmse=%s",
+        run_id,
+        model_metadata["model_version"],
+        metrics["rmse"],
+    )
+    return metadata
 
 
 def select_training_window(
