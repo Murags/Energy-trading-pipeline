@@ -25,7 +25,10 @@ def test_ci_workflow_runs_fixture_safe_pytest_on_pushes_and_pull_requests():
     assert "actions/checkout@v4" in used_actions
     assert "astral-sh/setup-uv@v6" in used_actions
     assert "uv sync --extra test --locked" in run_commands
-    assert "uv run pytest -q" in run_commands
+    assert (
+        'uv run pytest -q -m "not external_api and not aws and not slow"'
+        in run_commands
+    )
 
     forbidden_terms = ("ENTSOE_API_KEY", "AWS_ACCESS_KEY_ID", "2020-2025", "backtest")
     assert not any(term in workflow_text for term in forbidden_terms)
