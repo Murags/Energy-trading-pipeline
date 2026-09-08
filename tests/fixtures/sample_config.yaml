@@ -5,6 +5,11 @@ data:
 dates:
   start_date: "2023-01-01"
   end_date: "2023-01-08"
+  # Training rows must precede validation rows; both ranges are end-inclusive.
+  train_start_date: "2023-01-02"
+  train_end_date: "2023-01-06"
+  validation_start_date: "2023-01-07"
+  validation_end_date: "2023-01-08"
 features:
   lag_hours: [1, 24]
   rolling_window_hours: [24]
