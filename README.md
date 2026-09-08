@@ -20,6 +20,44 @@ Dependency management uses [`uv`](https://docs.astral.sh/uv/). `pyproject.toml` 
 
 Full dependency declarations, `uv sync` setup instructions, and CLI usage will be documented as Stories 1.2-1.4 land.
 
+## Baseline Training
+
+Train once from an existing feature Parquet using explicit experiment, path, and
+XGBoost parameter configurations:
+
+```bash
+uv run python -m energy_trading_pipeline.cli train \
+  --config configs/experiment.yaml \
+  --paths-config configs/local_paths.yaml \
+  --model-params-config configs/model_params.yaml
+```
+
+The paths file must define `feature_data_parquet_path`, `models_dir`, and
+`logs_dir`. Relative paths resolve against the repository root. Model parameters
+may instead be declared inline under `model.params`; an explicitly supplied
+parameters file replaces that mapping. No companion config is loaded implicitly.
+
+The command fits only the configured training dates and reports RMSE and MAE on
+the later validation dates. Both date ranges include their full final day in UTC.
+It saves `model.json` and `metadata.yaml` under
+`<models_dir>/artifacts/model_YYYYMMDD_HHMMSS/`, updates
+`<models_dir>/registry/models_index.yaml`, and writes resolved configuration,
+selected windows, metrics, and artifact paths to
+`<logs_dir>/runs/run_YYYYMMDD_HHMMSS/run_metadata.yaml`.
+
+Use the canonical feature artifact, not processed prices: same-hour `price_de`
+and `price_fr` are rejected to prevent target leakage. Missing feature data fails
+clearly; training does not generate features, fetch data, backtest, or retrain.
+The registry supports one writer at a time and rejects duplicate second-resolution
+model versions rather than overwriting prior artifacts. Retry a collision in a
+later second. The configured strategy is recorded for provenance, not executed.
+
+The existing config-only bootstrap remains available:
+
+```bash
+uv run python -m energy_trading_pipeline.cli --config configs/experiment.yaml
+```
+
 ## Tests
 
 Install the test dependencies and run the local fixture suite:
