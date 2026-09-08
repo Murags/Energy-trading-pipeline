@@ -1,7 +1,8 @@
 ---
 story_id: "5.3"
 title: "Save Model Artifacts and Metadata"
-status: "Ready for Dev"
+status: "review"
+baseline_commit: "b1cb649"
 parent_epic: "Epic 5: XGBoost Model Training and Model Registry"
 priority: "P0"
 suggested_sprint: "Sprint 5"
@@ -12,7 +13,7 @@ source: "_bmad-output/epics.md"
 
 ## Status
 
-Ready for Dev
+review
 
 ## Parent Epic
 
@@ -73,10 +74,46 @@ Story 5.2.
 
 ## QA Checklist
 
-- [ ] Story scope matches the approved `epics.md` entry.
-- [ ] Acceptance criteria are satisfied.
-- [ ] Required tests are added or updated.
-- [ ] Tests pass on fixture/debug data where applicable.
-- [ ] No unintended dashboard, AWS, Docker, API, or modelling scope was added.
-- [ ] No secrets, tokens, credentials, or large generated datasets were committed.
-- [ ] Documentation or configuration was updated if this story changes usage or commands.
+- [x] Story scope matches the approved `epics.md` entry.
+- [x] Acceptance criteria are satisfied.
+- [x] Required tests are added or updated.
+- [x] Tests pass on fixture/debug data where applicable.
+- [x] No unintended dashboard, AWS, Docker, API, or modelling scope was added.
+- [x] No secrets, tokens, credentials, or large generated datasets were committed.
+- [x] Documentation or configuration was updated if this story changes usage or commands.
+
+## Dev Agent Record
+
+### Implementation Plan
+
+Use the existing fitted XGBoost wrapper to save `model.json`, record YAML metadata,
+and atomically replace a filesystem index after both artifacts are written. The
+registry is single-writer; UTC second-resolution version collisions fail explicitly.
+
+### Debug Log
+
+- Red: registry tests failed to import the not-yet-implemented persistence function.
+- Green: `uv run pytest -q` passed all 489 tests, including 13 new registry cases.
+- `git diff --check` passed. No lint/static-analysis tool is configured.
+
+### Completion Notes
+
+- Required model version, window, features, target, parameters, validation metrics,
+  creation timestamp, and artifact paths are persisted and indexed.
+- Tests cover model reload equivalence, index preservation, collisions, malformed
+  indexes, invalid metrics, unfitted models, and cleanup after a failed save.
+- Generated model versions and the runtime index are ignored by Git.
+- Story 5.2 is available in merged PR #83. No sprint-status file exists; this file
+  tracks status. No dependencies or future-story functionality were introduced.
+
+## File List
+
+- `.gitignore`
+- `src/energy_trading_pipeline/models/registry.py`
+- `tests/unit/test_model_registry.py`
+- `_bmad-output/implementation-artifacts/sprint-5/story-5.3-save-model-artifacts-and-metadata.md`
+
+## Change Log
+
+- 2026-09-08: Implemented and verified model artifact persistence for issue #32;
+  ready for review.
