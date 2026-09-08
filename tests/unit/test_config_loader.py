@@ -168,6 +168,10 @@ def test_repository_sample_configs_load_with_debug_safe_defaults():
     assert fixture_config["dates"] == {
         "start_date": "2023-01-01",
         "end_date": "2023-01-08",
+        "train_start_date": "2023-01-02",
+        "train_end_date": "2023-01-06",
+        "validation_start_date": "2023-01-07",
+        "validation_end_date": "2023-01-08",
     }
     assert fixture_config["retraining"] == {
         "strategy": "fixed_schedule",
