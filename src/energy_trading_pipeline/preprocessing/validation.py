@@ -1,4 +1,4 @@
-"""Lightweight validation of normalized hourly timestamps."""
+"""Lightweight validation of normalized timestamps and record quality."""
 
 import logging
 from typing import Any
@@ -7,6 +7,35 @@ import pandas as pd
 
 
 logger = logging.getLogger(__name__)
+
+
+def summarize_records(df: pd.DataFrame) -> dict[str, Any]:
+    """Count null cells and surplus duplicate instants without changing records.
+
+    Require nonempty data with unique column names and parsed, timezone-aware,
+    non-null timestamps. Hourly gaps are left to hourly validation/alignment.
+    """
+    if not df.columns.is_unique:
+        raise ValueError("Duplicate column names are not supported")
+    if "timestamp" not in df.columns:
+        raise ValueError("Missing required column: timestamp")
+    if df.empty:
+        raise ValueError("Cannot clean an empty dataset")
+    timestamps = df["timestamp"]
+    if not isinstance(timestamps.dtype, pd.DatetimeTZDtype):
+        raise ValueError("timestamp must contain parsed timezone-aware datetimes")
+    if timestamps.isna().any():
+        raise ValueError("timestamp contains missing values; normalize before cleaning")
+    utc = timestamps.dt.tz_convert("UTC")
+    duplicates = utc[utc.duplicated()]
+    return {
+        "missing_counts": {column: int(count) for column, count in df.isna().sum().items()},
+        "duplicate_count": len(duplicates),
+        "duplicate_timestamps": [
+            value.isoformat() for value in duplicates.drop_duplicates().sort_values()
+        ],
+        "date_range": {"start": utc.min().isoformat(), "end": utc.max().isoformat()},
+    }
 
 
 def validate_hourly_index(timestamps: pd.Series) -> dict[str, Any]:
