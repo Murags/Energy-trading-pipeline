@@ -162,7 +162,7 @@ def test_repository_sample_configs_load_with_debug_safe_defaults():
         PROJECT_ROOT / "data" / "raw" / "entsoe" / "prices" / "price_de.csv"
     ).resolve()
     assert config["paths"]["processed_data_parquet_path"] == (
-        PROJECT_ROOT / "data" / "processed" / "prices.parquet"
+        PROJECT_ROOT / "data" / "processed" / "aligned_hourly" / "prices.parquet"
     ).resolve()
     assert config["model"]["params"]["n_estimators"] == 100
     assert fixture_config["dates"] == {
