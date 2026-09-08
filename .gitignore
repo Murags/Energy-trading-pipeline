@@ -19,3 +19,5 @@ __pycache__/
 
 # Generated run artifacts
 logs/runs/run_*/
+data/raw/smard/prices/run_*/
+data/processed/run_*/
