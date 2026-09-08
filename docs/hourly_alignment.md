@@ -53,6 +53,50 @@ wind and radiation. It then verifies all 192 price/weather hours.
 uv run pytest tests/unit/test_alignment.py tests/integration/test_hourly_alignment.py -q
 ```
 
-This story exposes an in-memory preprocessing function only. Spread calculation,
-processed Parquet persistence under `data/processed/aligned_hourly/`, and source
-metadata persistence belong to Story 3.4. No CLI command is added here.
+## Spread target and processed output
+
+After alignment, `calculate_spread(aligned)` returns a copy with the canonical
+target `spread = price_de - price_fr`. Positive spreads mean the German price is
+higher. Negative prices and zero spreads are valid. Optional columns are retained;
+any existing spread is recalculated. Output is sorted by UTC delivery timestamp.
+Missing, nonnumeric, boolean, complex, or infinite prices fail, as do empty data,
+naive timestamps, duplicate delivery instants, off-hour records, and hourly gaps.
+
+`save_processed_data` calculates the spread and persists the complete aligned
+dataset. Load the local paths configuration to use the configured destination:
+
+```python
+from pathlib import Path
+
+from energy_trading_pipeline.config.loader import load_config
+from energy_trading_pipeline.preprocessing.spread import save_processed_data
+
+config = load_config(
+    Path("configs/experiment.yaml"),
+    local_paths_config_path=Path("configs/local_paths.yaml"),
+)
+parquet_path, metadata_path = save_processed_data(
+    aligned,
+    config["paths"]["processed_data_parquet_path"],
+    source_files={
+        "price_de": config["paths"]["price_de_csv_path"],
+        "price_fr": config["paths"]["price_fr_csv_path"],
+        # Include weather/grid paths here when those sources contributed data.
+    },
+    alignment_metadata=alignment_report,
+)
+```
+
+The default destination is `data/processed/aligned_hourly/prices.parquet`, with
+`prices.metadata.yaml` beside it. Metadata records caller-supplied source paths,
+actual saved UTC endpoints, row count, columns, target formula, artifact paths,
+and the optional alignment report (including excluded optional variables).
+Supply the paths actually loaded; persistence does not reopen source files.
+Existing processed artifacts at the selected paths are replaced. Raw sources
+are unaffected. A successful call returns both paths; filesystem errors propagate.
+
+No preprocessing CLI command is introduced. Verify the local fixture flow with:
+
+```bash
+uv run pytest tests/unit/test_spread_calculation.py tests/integration/test_hourly_alignment.py -q
+```

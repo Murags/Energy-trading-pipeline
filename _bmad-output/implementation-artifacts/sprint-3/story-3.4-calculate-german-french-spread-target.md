@@ -1,7 +1,8 @@
 ---
 story_id: "3.4"
 title: "Calculate German-French Spread Target"
-status: "Ready for Dev"
+status: "review"
+baseline_commit: "e37d47491ee1a88a8726c7563ac4a69d51421247"
 parent_epic: "Epic 3: Data Preprocessing and Spread Calculation"
 priority: "P0"
 suggested_sprint: "Sprint 3"
@@ -12,7 +13,7 @@ source: "_bmad-output/epics.md"
 
 ## Status
 
-Ready for Dev
+review
 
 ## Parent Epic
 
@@ -73,10 +74,68 @@ Story 3.3.
 
 ## QA Checklist
 
-- [ ] Story scope matches the approved `epics.md` entry.
-- [ ] Acceptance criteria are satisfied.
-- [ ] Required tests are added or updated.
-- [ ] Tests pass on fixture/debug data where applicable.
-- [ ] No unintended dashboard, AWS, Docker, API, or modelling scope was added.
-- [ ] No secrets, tokens, credentials, or large generated datasets were committed.
-- [ ] Documentation or configuration was updated if this story changes usage or commands.
+- [x] Story scope matches the approved `epics.md` entry.
+- [x] Acceptance criteria are satisfied.
+- [x] Required tests are added or updated.
+- [x] Tests pass on fixture/debug data where applicable.
+- [x] No unintended dashboard, AWS, Docker, API, or modelling scope was added.
+- [x] No secrets, tokens, credentials, or large generated datasets were committed.
+- [x] Documentation or configuration was updated if this story changes usage or commands.
+
+## Dev Agent Record
+
+### Debug Log
+
+- Story 3.3's alignment implementation is available; its story remains in review.
+  No sprint-status.yaml or project-context.md exists. This story has no separate
+  Tasks/Subtasks section; its description, acceptance criteria, and QA checklist
+  governed implementation and completion.
+- Used the skill's manual customization fallback because system python3 lacks
+  tomllib. No team/user overrides or additional activation steps were present.
+- Red: targeted pytest collection failed because calculate_spread and
+  save_processed_data did not yet exist. Green: all 29 initial unit cases passed.
+- Added three further unit cases and extended the existing 192-hour fixture
+  integration test through spread calculation, Parquet reload, and YAML checks.
+- `UV_CACHE_DIR=/private/tmp/energy-trading-uv-cache uv run pytest -q`:
+  210 passed. The cache override avoids the sandbox-restricted default uv cache.
+  Default markers exclude live API, AWS, and slow tests.
+- `git diff --check` passed. No lint or static-analysis tool is configured.
+
+### Completion Notes
+
+- Implemented calculate_spread as a nonmutating dataframe transformation using
+  canonical German-minus-French arithmetic. Output is sorted and UTC-normalized;
+  optional columns are retained, and any stale spread is recalculated.
+- Reused existing timestamp validators. Missing required columns, invalid prices,
+  empty data, duplicate/off-hour delivery instants, and hourly gaps fail clearly.
+  Float arithmetic avoids unsigned/integer wraparound; non-finite output fails.
+- Implemented save_processed_data with an explicit configured path and source
+  mapping. Parquet contains the complete aligned frame and target; its YAML
+  sidecar records source files, actual UTC date range, row count, columns, target
+  formula, artifact paths, and optional alignment metadata.
+- Updated the default processed destination to
+  data/processed/aligned_hourly/prices.parquet and documented both public APIs,
+  caller-supplied provenance, validation, and processed-file replacement behavior.
+- Added 32 unit cases covering known positive/negative/zero arithmetic,
+  nonmutation, unsigned and nullable values, invalid inputs, overflow, Parquet
+  persistence, and source/date metadata. Extended the fixture integration test
+  and adjusted the config destination assertion.
+- All acceptance criteria are satisfied. Generated test artifacts remain in
+  temporary directories. No new dependencies, credentials, commits, full historical
+  experiments, or future-story implementation were introduced. No blockers remain.
+
+## File List
+
+- `src/energy_trading_pipeline/preprocessing/spread.py`
+- `configs/local_paths.yaml`
+- `docs/hourly_alignment.md`
+- `tests/unit/test_spread_calculation.py`
+- `tests/unit/test_config_loader.py`
+- `tests/integration/test_hourly_alignment.py`
+- `_bmad-output/implementation-artifacts/sprint-3/story-3.4-calculate-german-french-spread-target.md`
+
+## Change Log
+
+- 2026-09-08: Implemented Story 3.4 spread calculation and processed Parquet/YAML
+  persistence, updated configured path and usage documentation, added 32 unit
+  tests, and extended fixture integration coverage; marked for review.

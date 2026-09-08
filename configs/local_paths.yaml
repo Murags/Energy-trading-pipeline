@@ -2,7 +2,7 @@ price_de_csv_path: data/raw/entsoe/prices/price_de.csv
 price_fr_csv_path: data/raw/entsoe/prices/price_fr.csv
 data_raw_dir: data/raw
 raw_data_parquet_dir: data/raw/parquet
-processed_data_parquet_path: data/processed/prices.parquet
+processed_data_parquet_path: data/processed/aligned_hourly/prices.parquet
 feature_data_parquet_path: data/features/feature_dataset.parquet
 models_dir: models
 logs_dir: logs
