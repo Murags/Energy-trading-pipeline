@@ -18,6 +18,8 @@ __pycache__/
 .env
 
 # Generated run artifacts
+data/features/*.parquet
+data/features/*.metadata.yaml
 logs/runs/run_*/
 data/raw/smard/prices/run_*/
 data/processed/run_*/
