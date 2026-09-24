@@ -112,6 +112,23 @@ Stories 2.1 and 2.2 are available. Story 2.4 remains an interface-only story.
 - No dependency, reusable API adapter, model, or cloud infrastructure was added.
   Full historical coverage and publication-time vintages remain unverified.
 
+### User-Requested Full-Year Follow-Up (2026-09-11)
+
+- At the user's explicit request, downloaded the whole 2024 local-market year
+  to a separate snapshot, `run_20260911_053845`. The original January sample is
+  unchanged and its checksum verification still passes.
+- UTC interval: `2023-12-31T23:00:00Z` inclusive through
+  `2024-12-31T23:00:00Z` exclusive. Both markets have 8,784 valid hourly prices,
+  zero missing hours, zero duplicate timestamps, and exact timestamp alignment.
+- Validated all 366 market days, including 23 hours on March 31 and 25 on
+  October 27. All remaining days contain 24 hours.
+- Independent offline validation confirms 17,568 prices match the original
+  JSON exactly, 110 source-response checksums and four export checksums pass,
+  and CSV/Parquet round trips through the existing loader succeed.
+- Updated `docs/data_sources.md` with download links, year boundaries, coverage,
+  and summary statistics. No application code, test, or dependency changed;
+  verification was specific to the acquired data rather than another CI run.
+
 ## File List
 
 - `.gitignore` (modified)
@@ -124,8 +141,12 @@ Stories 2.1 and 2.2 are available. Story 2.4 remains an interface-only story.
 - `data/processed/run_20260908_150908/prices_de_fr.csv` (generated, Git-ignored)
 - `data/processed/run_20260908_150908/prices_de_fr.parquet` (generated, Git-ignored)
 - `data/processed/run_20260908_150908/metadata.json` (generated, Git-ignored)
+- `data/raw/smard/prices/run_20260911_053845/` (110 original source responses and manifest; generated, Git-ignored)
+- `data/processed/run_20260911_053845/` (`price_de.csv`, `price_fr.csv`, `prices_de_fr.csv`, `prices_de_fr.parquet`, `metadata.json`, `verification.json`; generated, Git-ignored)
 
 ## Change Log
 
 - 2026-09-08: Added this bounded real-data acquisition story at the user's request.
 - 2026-09-08: Completed the SMARD acquisition and validation; marked for review.
+- 2026-09-11: Acquired and validated all of 2024 as an explicit user-requested
+  follow-up; preserved the January snapshot and documented the full-year files.
