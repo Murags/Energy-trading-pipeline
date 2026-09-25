@@ -15,10 +15,15 @@ def load_notebook() -> dict:
     return json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
 
 
+def cell_source(cell: dict) -> str:
+    """Notebook JSON may store source as a string or a list of lines."""
+    return "".join(cell["source"])
+
+
 def test_notebook_presents_every_preprocessing_stage():
     notebook = load_notebook()
     markdown = "\n".join(
-        cell["source"]
+        cell_source(cell)
         for cell in notebook["cells"]
         if cell["cell_type"] == "markdown"
     )
@@ -39,7 +44,7 @@ def test_all_code_cells_execute_in_fixture_mode(monkeypatch):
     for position, cell in enumerate(load_notebook()["cells"]):
         if cell["cell_type"] != "code":
             continue
-        source = cell["source"]
+        source = cell_source(cell)
         exec(compile(source, f"{NOTEBOOK_PATH.name}:cell-{position}", "exec"), namespace)
 
     cleanup_reports = namespace["cleanup_reports"]
