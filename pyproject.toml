@@ -29,6 +29,10 @@ test = [
 aws = [
     "boto3>=1.34",
 ]
+notebook = [
+    "nbconvert>=7.16",
+    "ipykernel>=6.29",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
