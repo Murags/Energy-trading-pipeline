@@ -26,7 +26,11 @@ model:
   type: xgboost
   target_column: spread
 backtest:
+  # Inclusive UTC calendar dates; generated intervals have exclusive ends.
+  evaluation_start_date: "2023-01-06"
+  evaluation_end_date: "2023-01-08"
   train_window_days: 3
+  validation_window_days: 1
   forecast_horizon_hours: 24
 retraining:
   strategy: fixed_schedule
