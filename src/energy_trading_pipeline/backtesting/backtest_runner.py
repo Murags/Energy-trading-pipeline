@@ -1,6 +1,8 @@
 """Chronological single-strategy orchestration with a static baseline hook."""
 
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Any
 
@@ -17,10 +19,150 @@ from energy_trading_pipeline.backtesting.splitter import (
     TimeWindow,
     generate_backtest_windows_from_config,
 )
+from energy_trading_pipeline.config.paths import (
+    get_default_base_dir,
+    resolve_paths_config,
+)
 from energy_trading_pipeline.models.xgboost_model import XGBoostSpreadModel
+from energy_trading_pipeline.utils.io import write_run_metadata
+from energy_trading_pipeline.utils.time import generate_run_id
 
 
 PolicyHook = Callable[[pd.Timestamp, pd.DataFrame], bool]
+
+
+def run_configured_backtest(
+    config: Mapping[str, Any], *, config_file_path: Path
+) -> dict[str, Any]:
+    """Run a local static baseline and persist run provenance and JSONL events.
+
+    Requires explicit paths, model parameters, ``backtest.feature_columns``, and
+    ``retraining.strategy: no_retraining``. Availability columns must already be
+    present in the Parquet input; they are never inferred by the CLI. Uses only
+    the first training window and leaves validation held out, as in run_backtest.
+    Aggregate metrics are deferred and recorded as an empty mapping.
+
+    Run/model directories are exclusively reserved to prevent overwrites. Failed
+    execution leaves its diagnostic log and any partial artifacts for inspection;
+    only successful execution writes run metadata. Returns that metadata.
+    """
+    paths_config = config.get("paths")
+    required_paths = ("feature_data_parquet_path", "models_dir", "logs_dir")
+    if not isinstance(paths_config, Mapping) or any(
+        not paths_config.get(key) for key in required_paths
+    ):
+        raise ValueError(
+            f"Backtesting requires paths {list(required_paths)}; use --paths-config"
+        )
+    paths = resolve_paths_config(dict(paths_config), get_default_base_dir())
+    feature_path = paths["feature_data_parquet_path"]
+    if not feature_path.is_file():
+        raise FileNotFoundError(f"Feature dataset not found: {feature_path}")
+    model_config = config.get("model")
+    if not isinstance(model_config, Mapping) or not isinstance(
+        model_config.get("params"), Mapping
+    ):
+        raise ValueError(
+            "Backtesting requires model.params; use --model-params-config or inline params"
+        )
+    model = XGBoostSpreadModel.from_config(model_config)
+    retraining = config.get("retraining")
+    if (
+        not isinstance(retraining, Mapping)
+        or retraining.get("strategy") != "no_retraining"
+    ):
+        raise ValueError(
+            "Backtesting CLI currently requires retraining.strategy: no_retraining"
+        )
+    windows = generate_backtest_windows_from_config(config)
+    columns = config["backtest"].get("feature_columns")
+    if not isinstance(columns, list) or not columns:
+        raise ValueError("Backtesting requires a nonempty backtest.feature_columns list")
+    frame = pd.read_parquet(feature_path)
+
+    run_id = generate_run_id()
+    model_version = run_id.replace("run_", "model_", 1)
+    run_dir = paths["logs_dir"] / "runs" / run_id
+    model_dir = paths["models_dir"] / "artifacts" / model_version
+    artifact_paths = {
+        "feature_dataset": str(feature_path),
+        "model": str(model_dir / "model.json"),
+        "forecasts": str(run_dir / "forecasts.parquet"),
+        "backtest_log": str(run_dir / "backtest_log.jsonl"),
+        "run_metadata": str(run_dir / "run_metadata.yaml"),
+    }
+    context = {
+        "stage": "backtesting",
+        "run_id": run_id,
+        "strategy": retraining["strategy"],
+        "model_version": model_version,
+        "evaluation_window": {
+            "start": windows[0].forecast.start.isoformat(),
+            "end": windows[-1].forecast.end.isoformat(),
+        },
+    }
+    run_dir.mkdir(parents=True, exist_ok=False)
+    log_path = Path(artifact_paths["backtest_log"])
+    _write_backtest_event(log_path, context, "backtest_started")
+    try:
+        model_dir.mkdir(parents=True, exist_ok=False)
+        forecasts = run_backtest(
+            frame,
+            config,
+            feature_columns=columns,
+            model_version=model_version,
+            model_output_path=Path(artifact_paths["model"]),
+            forecast_path=Path(artifact_paths["forecasts"]),
+            strategy=retraining["strategy"],
+        )
+        timestamps = pd.to_datetime(frame["timestamp"], utc=True)
+        metadata = {
+            **context,
+            "config_file_path": str(Path(config_file_path).resolve()),
+            "config": {
+                **config,
+                "paths": {key: str(value) for key, value in paths.items()},
+            },
+            "data_date_range": {
+                "start": timestamps.min().isoformat(),
+                "end": timestamps.max().isoformat(),
+            },
+            "feature_columns": columns,
+            "target_column": model.target_column,
+            "model_parameters": model.params,
+            "training_windows": [_window_metadata(windows[0].train)],
+            "validation_window": _window_metadata(windows[0].validation),
+            "window_convention": "[start, end)",
+            "metrics": {},
+            "artifact_paths": artifact_paths,
+        }
+        write_run_metadata(run_dir, metadata)
+        _write_backtest_event(
+            log_path, context, "backtest_completed", forecast_rows=len(forecasts)
+        )
+    except Exception as exc:
+        _write_backtest_event(log_path, context, "backtest_failed", error=str(exc))
+        raise
+    return metadata
+
+
+def _window_metadata(window: TimeWindow) -> dict[str, str]:
+    """Serialize a half-open UTC interval."""
+    return {"start": window.start.isoformat(), "end": window.end.isoformat()}
+
+
+def _write_backtest_event(
+    path: Path, context: Mapping[str, Any], event: str, **details: Any
+) -> None:
+    """Append a run-local event without configuring process-global logging."""
+    record = {
+        **context,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "event": event,
+        **details,
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record) + "\n")
 
 
 def _timestamp(value: Any, name: str) -> pd.Timestamp:

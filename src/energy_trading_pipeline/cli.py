@@ -6,6 +6,7 @@ from pathlib import Path
 
 import yaml
 
+from energy_trading_pipeline.backtesting.backtest_runner import run_configured_backtest
 from energy_trading_pipeline.config.loader import load_config
 from energy_trading_pipeline.config.paths import get_default_base_dir
 from energy_trading_pipeline.models.trainer import train_baseline
@@ -22,8 +23,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["train"],
-        help="Train a baseline model; omit to only inspect config and prepare a run.",
+        choices=["train", "backtest"],
+        help="Train or backtest; omit to only inspect config and prepare a run.",
     )
     parser.add_argument(
         "--config",
@@ -41,7 +42,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Train a baseline or preserve the config-only run bootstrap command."""
+    """Run training, backtesting, or the config-only run bootstrap command."""
     args = parse_args(argv)
 
     try:
@@ -55,6 +56,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Run ID: {metadata['run_id']}")
             print(f"Model version: {metadata['model_version']}")
             print(f"Model artifact: {metadata['artifact_paths']['model']}")
+            print(f"Run metadata written to: {metadata['artifact_paths']['run_metadata']}")
+            return 0
+        if args.command == "backtest":
+            metadata = run_configured_backtest(config, config_file_path=args.config)
+            print(f"Run ID: {metadata['run_id']}")
+            print(f"Model version: {metadata['model_version']}")
+            print(f"Forecast log: {metadata['artifact_paths']['forecasts']}")
+            print(f"Backtest log: {metadata['artifact_paths']['backtest_log']}")
             print(f"Run metadata written to: {metadata['artifact_paths']['run_metadata']}")
             return 0
     except (OSError, ValueError, KeyError, yaml.YAMLError) as exc:
