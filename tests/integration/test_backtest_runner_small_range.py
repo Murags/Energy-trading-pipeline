@@ -10,6 +10,7 @@ from energy_trading_pipeline.backtesting.forecast_log import (
     read_forecast_log,
 )
 from energy_trading_pipeline.models.xgboost_model import XGBoostSpreadModel
+from energy_trading_pipeline.retraining.no_retraining import NoRetrainingPolicy
 
 
 @pytest.fixture
@@ -79,6 +80,24 @@ def test_static_runner_trains_once_and_round_trips(runner_inputs, monkeypatch):
     assert (decisions[1][1]["timestamp"] < decisions[1][0]).all()
     pd.testing.assert_frame_equal(read_forecast_log(kwargs["forecast_path"]), result)
     pd.testing.assert_frame_equal(frame, original)
+
+
+def test_no_retraining_policy_drives_the_runner(runner_inputs, monkeypatch):
+    frame, config, kwargs = runner_inputs
+    fit = XGBoostSpreadModel.fit
+    fit_calls = []
+
+    def spy_fit(self, features, target):
+        fit_calls.append(len(target))
+        return fit(self, features, target)
+
+    monkeypatch.setattr(XGBoostSpreadModel, "fit", spy_fit)
+    policy = NoRetrainingPolicy()
+
+    result = run_backtest(frame, config, policy_hook=policy.as_policy_hook(), **kwargs)
+    assert len(fit_calls) == 1
+    assert result["strategy"].unique().tolist() == [policy.strategy]
+    assert result["model_version"].unique().tolist() == [kwargs["model_version"]]
 
 
 def test_loaded_baseline_matches_without_fitting(runner_inputs, monkeypatch):
