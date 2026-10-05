@@ -9,7 +9,11 @@ from energy_trading_pipeline.backtesting.forecast_log import (
     FORECAST_LOG_COLUMNS,
     read_forecast_log,
 )
+from energy_trading_pipeline.backtesting.splitter import (
+    generate_backtest_windows_from_config,
+)
 from energy_trading_pipeline.models.xgboost_model import XGBoostSpreadModel
+from energy_trading_pipeline.retraining.fixed_schedule import FixedSchedulePolicy
 from energy_trading_pipeline.retraining.no_retraining import NoRetrainingPolicy
 
 
@@ -98,6 +102,79 @@ def test_no_retraining_policy_drives_the_runner(runner_inputs, monkeypatch):
     assert len(fit_calls) == 1
     assert result["strategy"].unique().tolist() == [policy.strategy]
     assert result["model_version"].unique().tolist() == [kwargs["model_version"]]
+
+
+def test_fixed_schedule_hook_drives_runner_before_weekly_interval(runner_inputs):
+    frame, config, kwargs = runner_inputs
+    config["retraining"] = {"fixed_schedule_interval_days": 7}
+    policy = FixedSchedulePolicy.from_config(config)
+    windows = {
+        window.forecast.start: window.train
+        for window in generate_backtest_windows_from_config(config)
+    }
+    events = []
+    hook = policy.as_policy_hook(
+        training_window_provider=windows.__getitem__,
+        event_logger=events.append,
+    )
+
+    result = run_backtest(
+        frame, config, strategy=policy.strategy, policy_hook=hook, **kwargs
+    )
+
+    assert len(result) == 48
+    assert result["strategy"].unique().tolist() == ["fixed_schedule"]
+    assert events == []
+    pd.testing.assert_frame_equal(read_forecast_log(kwargs["forecast_path"]), result)
+
+
+@pytest.mark.parametrize("interval_days", [1, 7])
+def test_fixed_schedule_runner_hands_off_exact_training_window(
+    runner_inputs, interval_days
+):
+    frame, config, kwargs = runner_inputs
+    start = pd.Timestamp(config["backtest"]["evaluation_start_date"], tz="UTC")
+    due = start + pd.Timedelta(days=interval_days)
+    config["backtest"]["evaluation_end_date"] = due.date().isoformat()
+    config["retraining"] = {"fixed_schedule_interval_days": interval_days}
+    timestamps = pd.date_range(
+        frame["timestamp"].min(), due + pd.Timedelta(days=1), freq="h", inclusive="left"
+    )
+    frame = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "spread": np.sin(np.arange(len(timestamps))),
+            "hour": timestamps.hour,
+            "feature_available_at": timestamps - pd.Timedelta(days=1),
+            "actual_available_at": timestamps + pd.Timedelta(hours=2),
+        }
+    )
+    windows = {
+        window.forecast.start: window.train
+        for window in generate_backtest_windows_from_config(config)
+    }
+    policy = FixedSchedulePolicy.from_config(config)
+    events = []
+    hook = policy.as_policy_hook(
+        training_window_provider=windows.__getitem__,
+        event_logger=events.append,
+    )
+
+    with pytest.raises(NotImplementedError, match="Retraining execution"):
+        run_backtest(
+            frame, config, strategy=policy.strategy, policy_hook=hook, **kwargs
+        )
+
+    assert len(events) == 1
+    assert events[0]["timestamp"] == due.isoformat()
+    assert events[0]["strategy"] == policy.strategy
+    assert events[0]["interval_days"] == interval_days
+    assert events[0]["training_window"] == {
+        "start": windows[due].start.isoformat(),
+        "end": windows[due].end.isoformat(),
+    }
+    assert windows[due].end < due
+    assert not kwargs["forecast_path"].exists()
 
 
 def test_loaded_baseline_matches_without_fitting(runner_inputs, monkeypatch):

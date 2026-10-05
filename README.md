@@ -91,7 +91,8 @@ Alternatively, put `paths` (`feature_data_parquet_path`, `models_dir`, `logs_dir
 and `model.params` directly in the experiment YAML and supply only `--config`.
 Relative artifact/input paths resolve against the repository root. The current
 shared sample config uses `fixed_schedule`; select `no_retraining` explicitly for
-this command. Other strategies fail clearly until their policies are available.
+this command. The CLI remains static-only; the policy API below does not enable
+scheduled model refits through this command.
 
 ### Input and timing contract
 
@@ -143,6 +144,53 @@ To exercise the command against temporary synthetic fixtures:
 ```bash
 uv run pytest tests/integration/test_backtest_cli.py -q
 ```
+
+## Retraining Policies
+
+`FixedSchedulePolicy` implements the `fixed_schedule` boolean decision contract.
+Its first decision anchors the already-created model's schedule and returns
+`False`. Subsequent decisions return `True` once the interval has elapsed, then
+restart the interval from that decision time. Repeated timestamps do not trigger
+twice. Days are elapsed 24-hour UTC durations, not local calendar days across DST.
+Create a new policy instance for each backtest run.
+
+`FixedSchedulePolicy()` defaults to weekly decisions. For experiments, use
+`FixedSchedulePolicy.from_config(config)` to read
+`retraining.fixed_schedule_interval_days` from the full loaded config. The existing
+experiment YAML sets this to `7`; custom intervals must be positive integers.
+
+The standard `policy.as_policy_hook()` receives an aware issuance timestamp and
+canonical observable forecast history, returning a boolean. To hand scheduled
+request metadata to an event logger, supply both optional callbacks:
+
+```python
+from energy_trading_pipeline.backtesting.splitter import (
+  generate_backtest_windows_from_config,
+)
+from energy_trading_pipeline.retraining.fixed_schedule import FixedSchedulePolicy
+
+policy = FixedSchedulePolicy.from_config(config)
+training_windows = {
+  window.forecast.start: window.train
+  for window in generate_backtest_windows_from_config(config)
+}
+scheduled_requests = []
+hook = policy.as_policy_hook(
+  training_window_provider=training_windows.__getitem__,
+  event_logger=scheduled_requests.append,
+)
+```
+
+The provider returns the exact candidate `TimeWindow`, preserving the splitter's
+held-out validation gap. Windows must end no later than issuance. On a positive
+decision, the logger receives UTC ISO `timestamp`, `strategy`, `trigger_reason`,
+`interval_days`, and half-open `training_window` bounds (`start`, `end`). These
+records describe scheduled requests, not completed training events; the caller
+owns execution, model-version metadata, and persistence.
+
+The programmatic runner accepts this hook but still raises `NotImplementedError`
+on a positive decision because retraining execution is not yet implemented.
+This policy does not implement the later event writer or performance trigger.
 
 ## Tests
 
