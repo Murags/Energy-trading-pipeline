@@ -298,6 +298,45 @@ uv run pytest tests/unit/test_retraining_policies.py \
   tests/unit/test_retraining_events.py tests/unit/test_rolling_rmse.py
 ```
 
+### Core Evaluation Metrics
+
+`calculate_rmse(actual, prediction)` and `calculate_mae(actual, prediction)` in
+`monitoring.metrics` accept equal-length pandas Series and pair values by position,
+not index labels. Both skip missing actuals and return `NaN` when none are observed.
+Predictions must be finite real numbers even where actuals are missing; malformed
+inputs fail clearly. Neither function mutates its inputs.
+
+Aggregate canonical forecast and event dataframes over configured, timezone-aware
+pandas timestamp bounds:
+
+```python
+from energy_trading_pipeline.evaluation.strategy_comparison import (
+  calculate_strategy_metrics,
+)
+
+strategy_metrics = calculate_strategy_metrics(
+  forecasts,
+  completed_retraining_events,
+  evaluation_start=evaluation_start,
+  evaluation_end=evaluation_end,
+)
+```
+
+The UTC window is half-open: `[evaluation_start, evaluation_end)`. The result has
+one row per strategy represented in the input forecasts, with `strategy`, `rmse`,
+`mae`, `retraining_count`, and `retraining_frequency`. Frequency is **completed
+retraining events per elapsed UTC day**; missing actuals do not shorten that
+denominator. No events yields zero count/frequency; no scored actuals yields `NaN`
+error metrics. Empty input logs retain the output schema.
+
+Strategies must share target timestamps and actuals, including missingness.
+Duplicate strategy/target pairs, duplicate strategy/event timestamps, and events
+without a represented forecast strategy fail. Errors are recomputed from
+`actual` and `prediction`, not trusted from cached error columns. Supply completed
+retrains only, excluding initial training and unexecuted policy requests: the
+event schema does not prove execution success. This API performs no training,
+file exports, or CLI changes; the runner's existing execution limit still applies.
+
 ## Tests
 
 Install the test dependencies and run the local fixture suite:
