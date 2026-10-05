@@ -16,15 +16,16 @@ RUN apt-get update \
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
 
-COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --locked --extra test --no-dev --no-install-project
+ARG UV_EXTRA=test
+COPY pyproject.toml uv.lock README.md docker-compose.yml ./
+RUN uv sync --locked --extra test --extra "$UV_EXTRA" --no-dev --no-install-project
 
 COPY src/ ./src/
 COPY configs/ ./configs/
 COPY tests/ ./tests/
 COPY notebooks/ ./notebooks/
 COPY .github/workflows/ci.yml ./.github/workflows/ci.yml
-RUN uv sync --locked --extra test --no-dev \
+RUN uv sync --locked --extra test --extra "$UV_EXTRA" --no-dev \
     && uv pip uninstall --python /usr/local/bin/python pip setuptools wheel
 
 CMD ["python", "-m", "energy_trading_pipeline.cli", "--config", "configs/experiment.yaml"]

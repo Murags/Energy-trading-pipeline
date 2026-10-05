@@ -1,0 +1,35 @@
+services:
+  dashboard:
+    build:
+      context: .
+      args:
+        UV_EXTRA: dashboard
+    command:
+      - python
+      - -m
+      - streamlit
+      - run
+      - src/energy_trading_pipeline/dashboard/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+      - --browser.gatherUsageStats=false
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-8501}:8501"
+    volumes:
+      - type: bind
+        source: ./reports/dashboard_exports
+        target: /app/reports/dashboard_exports
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5)"
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
