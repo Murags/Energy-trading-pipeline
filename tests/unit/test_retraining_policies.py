@@ -4,6 +4,9 @@ import pandas as pd
 import pytest
 
 from energy_trading_pipeline.backtesting.forecast_log import build_forecast_log
+from energy_trading_pipeline.backtesting.splitter import TimeWindow
+from energy_trading_pipeline.config.loader import load_config
+from energy_trading_pipeline.retraining.fixed_schedule import FixedSchedulePolicy
 from energy_trading_pipeline.retraining.no_retraining import NoRetrainingPolicy
 from energy_trading_pipeline.retraining.policies import RetrainingPolicy
 
@@ -128,3 +131,189 @@ def test_decide_must_return_a_bool(empty_history):
 def test_interface_cannot_be_instantiated_directly():
     with pytest.raises(TypeError):
         RetrainingPolicy()
+
+
+def test_fixed_schedule_defaults_to_weekly_decisions(empty_history):
+    policy = FixedSchedulePolicy()
+    issuances = pd.date_range("2024-01-01", periods=22, freq="24h", tz="UTC")
+    decisions = [
+        policy.should_retrain(issuance, empty_history) for issuance in issuances
+    ]
+
+    triggered_days = [index for index, decision in enumerate(decisions) if decision]
+    assert triggered_days == [7, 14, 21]
+    assert policy.strategy == "fixed_schedule"
+
+
+@pytest.mark.parametrize("interval_days", [1, 3, 14])
+def test_fixed_schedule_custom_interval_boundaries(empty_history, interval_days):
+    policy = FixedSchedulePolicy(interval_days=interval_days)
+    start = pd.Timestamp("2024-01-01T06:00:00Z")
+    due = start + pd.Timedelta(days=interval_days)
+
+    assert policy.should_retrain(start, empty_history) is False
+    assert policy.should_retrain(due - pd.Timedelta(seconds=1), empty_history) is False
+    assert policy.should_retrain(due, empty_history) is True
+    assert policy.should_retrain(due, empty_history) is False
+    assert policy.should_retrain(due + pd.Timedelta(days=interval_days), empty_history)
+
+
+def test_fixed_schedule_anchors_next_interval_to_actual_decision(empty_history):
+    policy = FixedSchedulePolicy()
+    start = pd.Timestamp("2024-01-01T00:00:00Z")
+
+    assert policy.should_retrain(start, empty_history) is False
+    assert policy.should_retrain(start + pd.Timedelta(days=10), empty_history) is True
+    assert policy.should_retrain(start + pd.Timedelta(days=14), empty_history) is False
+    assert policy.should_retrain(start + pd.Timedelta(days=17), empty_history) is True
+
+
+def test_fixed_schedule_uses_elapsed_utc_days_across_dst(empty_history):
+    policy = FixedSchedulePolicy()
+    start = pd.Timestamp("2024-03-25T00:00:00", tz="Europe/Berlin")
+    local_week = pd.Timestamp("2024-04-01T00:00:00", tz="Europe/Berlin")
+
+    assert policy.should_retrain(start, empty_history) is False
+    assert policy.should_retrain(local_week, empty_history) is False
+    due = local_week + pd.Timedelta(hours=1)
+    assert policy.should_retrain(due, empty_history) is True
+
+
+@pytest.mark.parametrize("interval_days", [0, -1, True, False, 1.5, "7", None])
+def test_fixed_schedule_rejects_invalid_intervals(interval_days):
+    with pytest.raises(ValueError, match="interval_days.*positive integer"):
+        FixedSchedulePolicy(interval_days=interval_days)
+
+
+def test_fixed_schedule_loads_interval_from_experiment_config(empty_history):
+    config = load_config("configs/experiment.yaml")
+    original_interval = config["retraining"]["fixed_schedule_interval_days"]
+    assert original_interval == 7
+    config["retraining"]["fixed_schedule_interval_days"] = 2
+    policy = FixedSchedulePolicy.from_config(config)
+    start = pd.Timestamp("2024-01-01T00:00:00Z")
+
+    assert policy.should_retrain(start, empty_history) is False
+    assert policy.should_retrain(start + pd.Timedelta(days=2), empty_history) is True
+
+
+def test_fixed_schedule_requires_interval_in_config():
+    with pytest.raises(ValueError, match="fixed_schedule_interval_days"):
+        FixedSchedulePolicy.from_config({"retraining": {}})
+
+
+def training_window_at(issuance: pd.Timestamp) -> TimeWindow:
+    """Provide an explicit half-open training window with held-out validation."""
+    return TimeWindow(
+        start=issuance - pd.Timedelta(days=4),
+        end=issuance - pd.Timedelta(days=1),
+    )
+
+
+def test_fixed_schedule_hook_passes_training_window_to_event_logger(empty_history):
+    policy = FixedSchedulePolicy(interval_days=2)
+    events = []
+    hook = policy.as_policy_hook(
+        training_window_provider=training_window_at,
+        event_logger=events.append,
+    )
+    start = pd.Timestamp("2024-01-01T01:00:00+01:00")
+    due = start + pd.Timedelta(days=2)
+
+    assert hook(start, empty_history) is False
+    assert events == []
+    assert hook(due, empty_history) is True
+    assert events == [
+        {
+            "timestamp": "2024-01-03T00:00:00+00:00",
+            "strategy": "fixed_schedule",
+            "trigger_reason": "fixed_schedule_interval_elapsed",
+            "interval_days": 2,
+            "training_window": {
+                "start": "2023-12-30T00:00:00+00:00",
+                "end": "2024-01-02T00:00:00+00:00",
+            },
+        }
+    ]
+    assert hook(due, empty_history) is False
+    assert len(events) == 1
+
+
+def test_fixed_schedule_hook_without_logger_preserves_bool_contract(empty_history):
+    hook = FixedSchedulePolicy(interval_days=1).as_policy_hook()
+    assert hook(pd.Timestamp("2024-01-01T00:00:00Z"), empty_history) is False
+    assert hook(pd.Timestamp("2024-01-02T00:00:00Z"), empty_history) is True
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"training_window_provider": training_window_at},
+        {"event_logger": [].append},
+        {"training_window_provider": 42, "event_logger": [].append},
+        {"training_window_provider": training_window_at, "event_logger": 42},
+    ],
+)
+def test_fixed_schedule_hook_requires_both_callable_logging_inputs(options):
+    with pytest.raises(ValueError, match="training_window_provider.*event_logger"):
+        FixedSchedulePolicy().as_policy_hook(**options)
+
+
+def test_fixed_schedule_hook_rejects_future_training_window_without_advancing(
+    empty_history,
+):
+    policy = FixedSchedulePolicy(interval_days=1)
+    events = []
+    invalid = True
+
+    def provide_window(issuance):
+        if invalid:
+            return TimeWindow(issuance, issuance + pd.Timedelta(days=1))
+        return training_window_at(issuance)
+
+    hook = policy.as_policy_hook(
+        training_window_provider=provide_window,
+        event_logger=events.append,
+    )
+    start = pd.Timestamp("2024-01-01T00:00:00Z")
+
+    with pytest.raises(ValueError, match="training_window.*decision_timestamp"):
+        hook(start + pd.Timedelta(days=1), empty_history)
+    assert events == []
+    invalid = False
+    assert hook(start, empty_history) is False
+    assert hook(start + pd.Timedelta(days=1), empty_history) is True
+
+
+def test_fixed_schedule_hook_requires_typed_training_window(empty_history):
+    hook = FixedSchedulePolicy().as_policy_hook(
+        training_window_provider=lambda issuance: {"start": issuance, "end": issuance},
+        event_logger=[].append,
+    )
+    with pytest.raises(ValueError, match="TimeWindow"):
+        hook(pd.Timestamp("2024-01-01T00:00:00Z"), empty_history)
+
+
+@pytest.mark.parametrize("fault", ["future_history", "missing_column"])
+def test_fixed_schedule_invalid_history_does_not_consume_trigger(empty_history, fault):
+    policy = FixedSchedulePolicy(interval_days=1)
+    start = pd.Timestamp("2024-01-01T00:00:00Z")
+    due = start + pd.Timedelta(days=1)
+    policy.should_retrain(start, empty_history)
+    invalid_history = make_history(["2024-01-03T00:00:00Z"])
+    if fault == "missing_column":
+        invalid_history = invalid_history.drop(columns=["squared_error"])
+
+    with pytest.raises(ValueError):
+        policy.should_retrain(due, invalid_history)
+    assert policy.should_retrain(due, empty_history) is True
+
+
+def test_fixed_schedule_does_not_mutate_history_when_triggering():
+    policy = FixedSchedulePolicy(interval_days=1)
+    policy.should_retrain(pd.Timestamp("2024-01-01T00:00:00Z"), make_history([]))
+    history = make_history(["2024-01-01T12:00:00Z"], strategy="fixed_schedule")
+    original = history.copy(deep=True)
+
+    assert policy.should_retrain(pd.Timestamp("2024-01-02T00:00:00Z"), history) is True
+    pd.testing.assert_frame_equal(history, original)
