@@ -564,6 +564,12 @@ The sidebar's **Exports directory** defaults to `reports/dashboard_exports`;
 set it to the configured export directory for a custom report location. Missing
 or malformed exports produce an error message rather than running the pipeline.
 
+The directory must contain `forecasts.parquet`, `metrics.parquet`,
+`retraining_events.parquet`, and `model_versions.parquet`, including schemas for
+empty tables. See [Dashboard Exports](#dashboard-exports) for their columns and
+how to export saved results independently. If Streamlit is unavailable, use the
+[static-report fallback](#static-report-fallback) below.
+
 The strategy filter applies to the stored RMSE/MAE summary and all five views:
 forecast vs actual, rolling RMSE, retraining events, model version changes, and
 strategy comparison. Model metadata is limited to versions referenced by the
@@ -581,6 +587,83 @@ Streamlit smoke tests, use:
 uv run --extra dashboard --extra test pytest -q \
   tests/unit/test_dashboard_charts.py tests/unit/test_dashboard_data_loader.py
 ```
+
+### Static Report Fallback
+
+Streamlit is optional for reviewing saved results. No full backtest, training,
+ingestion, external credentials, or AWS operations are needed for this fallback.
+
+If report outputs already exist, open
+`reports/tables/<run_id>/strategy_comparison.csv` in a spreadsheet and the selected
+run's PNGs under `reports/figures/forecasts_vs_actuals/`, `rolling_rmse/`,
+`retraining_events/`, and `strategy_comparison/`. Their filenames are
+`<run_id>.png`; see [Evaluation Figures](#evaluation-figures) for the exact paths.
+Use one run and evaluation period throughout. These static files can be inspected
+without Python or Streamlit; they are not created merely by opening the dashboard.
+
+If only the four-file dashboard snapshot is available, run this from the
+repository root after the normal core setup (`uv sync --locked`). No dashboard
+or notebook extra is required; preserve any extras you already use when syncing.
+For custom paths, change `exports_dir` to the
+configured `<reports_dir>/dashboard_exports`; figures go to the same report
+root's `figures` directory.
+
+```bash
+uv run python - <<'PY'
+from pathlib import Path
+
+from energy_trading_pipeline.dashboard.data_loader import load_dashboard_artifacts
+from energy_trading_pipeline.evaluation.plots import (
+  plot_forecasts_vs_actuals,
+  plot_rolling_rmse,
+  plot_retraining_events,
+  plot_strategy_comparison,
+)
+
+exports_dir = Path("reports/dashboard_exports")
+artifacts = load_dashboard_artifacts(exports_dir)
+for name, table in artifacts.items():
+  print(f"\n{name} ({len(table)} rows)")
+  print(table.head(24).to_string(index=False))
+
+metrics = artifacts["metrics"]
+if metrics.empty:
+  print("No evaluation rows; inspect the empty tables above.")
+else:
+  run_ids = metrics["run_id"].unique()
+  if len(run_ids) != 1:
+    raise ValueError("Select a snapshot containing exactly one run_id.")
+  options = {"run_id": run_ids[0], "figures_dir": exports_dir.parent / "figures"}
+  figure_paths = [
+    plot_forecasts_vs_actuals(artifacts["forecasts"], **options),
+    plot_rolling_rmse(artifacts["forecasts"], **options),
+    plot_retraining_events(artifacts["retraining_events"], **options),
+    plot_strategy_comparison(metrics, **options),
+  ]
+  for path in figure_paths:
+    print(path)
+PY
+```
+
+Open the printed PNG paths in an image viewer or include them in the static
+report. The table previews show up to 24 rows each, including model metadata;
+the exported forecast/event `model_version` columns retain the version timeline.
+Figures use the full snapshot, not just the previews. Stored RMSE/MAE, retraining
+counts/frequency, and rolling RMSE are displayed, never recalculated. Missing
+scores remain unavailable, empty event logs produce a no-events figure, and
+omitted monitoring produces an insufficient-history rolling RMSE figure.
+
+All four exports and their schemas are required even when tables are empty.
+Missing or invalid files fail with a file-specific loader error; no pipeline
+stage is launched to repair them. Use [Dashboard Exports](#dashboard-exports)
+to recreate the snapshot from saved forecasts, comparison tables, completed
+events, and model metadata, not by rerunning the experiment. If no saved results
+exist, this fallback cannot invent them. An entirely empty snapshot prints its
+tables without creating figures because it has no run ID/evaluation period.
+
+The example only writes report PNGs, replacing the selected run's existing
+figures. It leaves the Parquet snapshot, source logs, tables, and models unchanged.
+Do not read a snapshot while another process is exporting its four files.
 
 ## Tests
 

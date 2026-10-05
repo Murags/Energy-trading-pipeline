@@ -1,6 +1,8 @@
 """Dashboard exports from small saved research artifacts, without pipeline work."""
 
+import builtins
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -40,6 +42,18 @@ SCHEMAS = {
     ],
     "model_versions": ["model_version", "model_type"],
 }
+
+
+def test_readme_documents_dashboard_requirements_and_fallback():
+    readme = Path(__file__).resolve().parents[2] / "README.md"
+    section = readme.read_text(encoding="utf-8").split(
+        "### Streamlit Dashboard\n", 1
+    )[1].split("\n### ", 1)[0]
+    assert "uv run --extra dashboard streamlit run" in section
+    assert "reports/dashboard_exports" in section
+    for name in SCHEMAS:
+        assert f"{name}.parquet" in section
+    assert "#static-report-fallback" in section
 
 
 @pytest.fixture
@@ -191,6 +205,87 @@ def test_dashboard_loader_reads_story_8_4_exports(tmp_path, saved_results, scena
         )
         expected = expected.sort_values(sort_columns).reset_index(drop=True)
         pd.testing.assert_frame_equal(loaded[name], expected)
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    ["normal", "no_events", "no_scores", "no_monitoring", "empty", "missing"],
+)
+def test_readme_static_report_fallback_uses_saved_exports_only(
+    tmp_path, saved_results, monkeypatch, capsys, scenario
+):
+    readme = Path(__file__).resolve().parents[2] / "README.md"
+    section = readme.read_text(encoding="utf-8").split(
+        "### Static Report Fallback\n", 1
+    )[1].split("\n## Tests", 1)[0]
+    example = re.search(
+        r"```bash\nuv run python - <<'PY'\n(.*?)\nPY\n```", section, re.DOTALL
+    )
+    assert example is not None, "Fallback must include an executable example"
+    data = load_results(saved_results)
+    if scenario in {"no_events", "empty"}:
+        data["retraining_events"] = data["retraining_events"].iloc[:0]
+    if scenario == "no_scores":
+        data["forecasts"]["actual"] = np.nan
+        data["metrics"][["rmse", "mae"]] = np.nan
+    if scenario == "empty":
+        for name in ("forecasts", "metrics", "monitoring"):
+            data[name] = data[name].iloc[:0]
+    if scenario == "no_monitoring":
+        data["monitoring"] = None
+    output_dir = tmp_path / "reports" / "dashboard_exports"
+    paths = exports.write_dashboard_exports(**data, exports_dir=output_dir)
+    if scenario == "missing":
+        paths.pop("model_versions").unlink()
+    originals = {
+        path: path.read_bytes() for path in [*saved_results.values(), *paths.values()]
+    }
+    import_module = builtins.__import__
+
+    def artifact_only_import(name, *args, **kwargs):
+        forbidden = (
+            "streamlit", "energy_trading_pipeline.cli",
+            "energy_trading_pipeline.backtesting", "energy_trading_pipeline.models",
+            "energy_trading_pipeline.data_ingestion",
+            "energy_trading_pipeline.preprocessing", "energy_trading_pipeline.features",
+            "energy_trading_pipeline.retraining",
+        )
+        assert not any(
+            name == prefix or name.startswith(f"{prefix}.") for prefix in forbidden
+        ), f"Fallback must not import {name}"
+        return import_module(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", artifact_only_import)
+    monkeypatch.chdir(tmp_path)
+    namespace = {"__name__": "__main__"}
+    source = compile(example.group(1), str(readme), "exec")
+    if scenario == "missing":
+        with pytest.raises(ValueError, match="Missing dashboard exports"):
+            exec(source, namespace)
+        assert not (tmp_path / "reports" / "figures").exists()
+    else:
+        exec(source, namespace)
+        output = capsys.readouterr().out
+        for name in SCHEMAS:
+            assert name in output
+            pd.testing.assert_frame_equal(
+                namespace["artifacts"][name], load_dashboard_artifacts(output_dir)[name]
+            )
+        figures = list((tmp_path / "reports" / "figures").glob(f"*/{RUN_ID}.png"))
+        if scenario == "empty":
+            assert not figures
+            assert "No evaluation rows" in output
+        else:
+            assert {path.parent.name for path in figures} == {
+                "forecasts_vs_actuals", "rolling_rmse", "retraining_events",
+                "strategy_comparison",
+            }
+            assert all(
+                path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n") for path in figures
+            )
+    for path, original in originals.items():
+        assert path.read_bytes() == original
+    assert not (tmp_path / "models").exists()
 
 
 @pytest.mark.parametrize(
