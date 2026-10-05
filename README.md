@@ -58,6 +58,92 @@ The existing config-only bootstrap remains available:
 uv run python -m energy_trading_pipeline.cli --config configs/experiment.yaml
 ```
 
+## Backtesting
+
+The `backtest` command runs the static `no_retraining` baseline from an existing
+local feature Parquet. Create a copy of the experiment config, for example
+`configs/backtest.yaml`, and set these sections for the desired data range:
+
+```yaml
+backtest:
+  evaluation_start_date: "2024-01-03"
+  evaluation_end_date: "2024-01-04"
+  train_window_days: 1
+  validation_window_days: 1
+  forecast_horizon_hours: 24
+  feature_columns: [hour]  # Explicit ordered predictors present in the Parquet.
+retraining:
+  strategy: no_retraining
+```
+
+Keep the other required experiment sections. Set `dates.start_date` and
+`dates.end_date` to describe the input data range. Supply paths and model
+parameters with the same flags as training:
+
+```bash
+uv run python -m energy_trading_pipeline.cli backtest \
+  --config configs/backtest.yaml \
+  --paths-config configs/local_paths.yaml \
+  --model-params-config configs/model_params.yaml
+```
+
+Alternatively, put `paths` (`feature_data_parquet_path`, `models_dir`, `logs_dir`)
+and `model.params` directly in the experiment YAML and supply only `--config`.
+Relative artifact/input paths resolve against the repository root. The current
+shared sample config uses `fixed_schedule`; select `no_retraining` explicitly for
+this command. Other strategies fail clearly until their policies are available.
+
+### Input and timing contract
+
+The Parquet must contain `timestamp`, `spread` (or the configured model target),
+the selected predictor columns, and timezone-aware `feature_available_at` and
+`actual_available_at` columns. `feature_available_at` must be the latest actual
+availability time of **all selected predictors** in that row;
+`actual_available_at` records when its target becomes observable. These are
+caller-supplied provenance, not timestamps inferred by the command. Feature
+artifacts produced by the current feature builder need these annotations before
+backtesting.
+
+Every predictor in a forecast block must be available at block issuance, including
+predictors for later delivery hours in that block. Training labels must be
+available at first issuance. The runner checks these constraints and complete
+hourly training/evaluation coverage before saving a model or forecasts.
+
+Evaluation dates include their full final UTC day. The example trains once on
+January 1, holds January 2 out, and forecasts January 3–4. Backtest windows come
+from `backtest`, independently of the `dates.train_*` settings used by `train`.
+The final forecast block is clipped to the evaluation end. Saved window bounds
+use `[start, end)` (exclusive end); the data date range records observed endpoints.
+
+### Outputs
+
+The command prints the run ID and output locations and writes:
+
+- `<logs_dir>/runs/run_YYYYMMDD_HHMMSS/forecasts.parquet` — chronological canonical
+  forecast records, actuals, errors, strategy, and model version.
+- `run_metadata.yaml` in the same directory — resolved configuration, input data
+  range, predictors, parameters, the actual training window, held-out validation
+  window, evaluation window, and artifact paths.
+- `backtest_log.jsonl` in the same directory — start/completion events with run,
+  strategy, model, evaluation range, and forecast count; execution failures record
+  an error event and may leave partial artifacts for inspection.
+- `<models_dir>/artifacts/model_YYYYMMDD_HHMMSS/model.json` — the fitted model with
+  its embedded feature/parameter contract, linked from run metadata.
+
+With `logs_dir: logs`, run outputs are under `logs/runs/run_*`. Run and model
+directory collisions fail instead of overwriting; retry in a later second.
+Validation is held out but not scored by this command, and run `metrics` is `{}`;
+aggregate evaluation and strategy comparison follow in later stories. Model
+provenance is in the run metadata; this command does not update the training
+registry's validation-metric index. No API credentials, AWS, or dashboard
+dependencies are required.
+
+To exercise the command against temporary synthetic fixtures:
+
+```bash
+uv run pytest tests/integration/test_backtest_cli.py -q
+```
+
 ## Tests
 
 Install the test dependencies and run the local fixture suite:
