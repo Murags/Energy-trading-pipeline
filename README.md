@@ -192,6 +192,42 @@ The programmatic runner accepts this hook but still raises `NotImplementedError`
 on a positive decision because retraining execution is not yet implemented.
 This policy does not implement the later event writer or performance trigger.
 
+### Rolling RMSE Monitor
+
+`calculate_rolling_rmse` returns a dictionary containing `rolling_rmse` at an
+explicit timezone-aware decision timestamp. Read the window from the existing
+experiment configuration:
+
+```python
+from energy_trading_pipeline.monitoring.rolling_rmse import calculate_rolling_rmse
+
+metrics = calculate_rolling_rmse(
+  forecast_history,
+  decision_timestamp,
+  window_days=config["retraining"]["rolling_rmse_window_days"],
+)
+rolling_rmse = metrics["rolling_rmse"]
+```
+
+The default window is seven elapsed UTC days, selecting target timestamps in
+`(decision_timestamp - window, decision_timestamp]`. Future target errors and
+future issuances are excluded. An error at the decision timestamp is included
+only when already observed. Callers must leave errors missing until actuals are
+available, including any publication delay; the log does not track publication
+times. Required columns are `timestamp` and `error`; canonical forecast logs also
+provide the checked `forecast_timestamp` and `strategy` columns.
+
+The default minimum is `window_days * 24` observed hourly errors, so a seven-day
+window needs 168. Missing errors do not count or become zeros; insufficient
+history returns `NaN`, not an RMSE of zero. Supply a positive `min_periods`
+explicitly for a smaller/debug history. Expired errors cannot fill the window.
+Select one strategy and one issuance per target before calling the monitor;
+mixed strategies and duplicate observed targets fail clearly. Model-version
+changes do not reset error history, and the input dataframe remains unchanged.
+
+The monitor only calculates the metric. Performance-triggered decisions,
+retraining execution, and persisted event records remain later story work.
+
 ## Tests
 
 Install the test dependencies and run the local fixture suite:
