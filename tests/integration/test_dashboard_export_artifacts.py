@@ -11,6 +11,7 @@ import yaml
 
 from energy_trading_pipeline.backtesting.forecast_log import write_forecast_log
 from energy_trading_pipeline import cli
+from energy_trading_pipeline.dashboard.data_loader import load_dashboard_artifacts
 from energy_trading_pipeline.evaluation import exports
 from energy_trading_pipeline.evaluation.strategy_comparison import (
     write_strategy_comparison,
@@ -166,6 +167,30 @@ def test_saved_results_export_four_minimal_parquet_schemas(
         assert path.read_bytes() == input_bytes[name]
     exports.write_dashboard_exports(**data, exports_dir=output_dir)
     assert len(list(output_dir.iterdir())) == 4
+
+
+@pytest.mark.parametrize("scenario", ["normal", "no_events", "no_scores", "empty"])
+def test_dashboard_loader_reads_story_8_4_exports(tmp_path, saved_results, scenario):
+    data = load_results(saved_results)
+    if scenario in {"no_events", "empty"}:
+        data["retraining_events"] = data["retraining_events"].iloc[:0]
+    if scenario == "no_scores":
+        data["forecasts"]["actual"] = np.nan
+        data["metrics"][["rmse", "mae"]] = np.nan
+    if scenario == "empty":
+        for name in ("forecasts", "metrics", "monitoring"):
+            data[name] = data[name].iloc[:0]
+    output_dir = tmp_path / "reports" / "dashboard_exports"
+    paths = exports.write_dashboard_exports(**data, exports_dir=output_dir)
+    loaded = load_dashboard_artifacts(output_dir)
+    for name, path in paths.items():
+        expected = pd.read_parquet(path)
+        sort_columns = (
+            ["timestamp", "strategy"] if "timestamp" in expected
+            else ["strategy"] if "strategy" in expected else ["model_version"]
+        )
+        expected = expected.sort_values(sort_columns).reset_index(drop=True)
+        pd.testing.assert_frame_equal(loaded[name], expected)
 
 
 @pytest.mark.parametrize(
