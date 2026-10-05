@@ -18,7 +18,55 @@ Local-first Python pipeline for German-French electricity price spread forecasti
 
 Dependency management uses [`uv`](https://docs.astral.sh/uv/). `pyproject.toml` is the canonical dependency source; `uv.lock` is the committed lockfile. There is no `requirements.txt`.
 
-Full dependency declarations, `uv sync` setup instructions, and CLI usage will be documented as Stories 1.2-1.4 land.
+The local Python virtual environment is the primary development and evaluation
+workflow. From the repository root:
+
+```bash
+uv venv --python 3.11
+uv sync --locked --extra test
+uv run pytest -q
+uv run python -m energy_trading_pipeline.cli --config configs/experiment.yaml
+```
+
+Python 3.11 or newer is supported. Add optional extras only when needed; when
+syncing, include any previously selected extras that you want to keep installed.
+Docker and AWS are not required for local development or evaluation.
+
+## Docker (Optional)
+
+After local setup works, Docker can provide an alternative reproducible
+environment. Run these manual acceptance checks from the repository root with
+Docker running:
+
+```bash
+docker build -t energy-trading-pipeline:local .
+docker run --rm --network none energy-trading-pipeline:local pytest -q
+docker run --rm --network none energy-trading-pipeline:local \
+  python -m energy_trading_pipeline.cli --config configs/experiment.yaml
+```
+
+The image uses a digest-pinned Python 3.11 base and version-pinned uv, installs
+locked core and test dependencies, and includes the small files needed by the
+existing fixture suite. The default command is the same config-only CLI smoke
+command; it does not load data, train, or backtest. Test markers exclude external
+API, AWS, and slow tests by default. Five optional Streamlit tests skip because
+dashboard dependencies are not installed. Building downloads dependencies;
+the test and smoke commands run without networking or credentials.
+
+The allowlisted build context excludes local environments, credentials, real
+datasets, and generated models, logs, and reports. Other existing CLI commands
+can replace the default command; mount required inputs and output directories
+explicitly. Without a mount, generated files disappear when `--rm` removes the
+container. To retain smoke-command metadata in the existing local logs directory:
+
+```bash
+docker run --rm --network none \
+  --mount type=bind,source="$PWD/logs",target=/app/logs \
+  energy-trading-pipeline:local
+```
+
+This image supports local research reproducibility, not production deployment.
+Docker does not replace the local virtualenv workflow or become a CI requirement.
 
 ## Baseline Training
 
