@@ -542,6 +542,46 @@ and missing values are preserved, not recomputed. Missing, unreadable, or
 malformed exports raise file-specific `DashboardArtifactError` messages.
 The loader never writes files, loads model weights, or imports pipeline stages.
 
+### Streamlit Dashboard
+
+From the repository root, install the optional dashboard dependency and launch:
+
+```bash
+uv sync --locked --extra dashboard --extra test
+uv run --extra dashboard streamlit run src/energy_trading_pipeline/dashboard/app.py
+```
+
+Open the local URL printed by Streamlit, normally `http://localhost:8501`.
+If PyArrow's native `mimalloc` allocator crashes on macOS with Python 3.14,
+launch with its system allocator instead (verified in this workspace):
+
+```bash
+ARROW_DEFAULT_MEMORY_POOL=system uv run --extra dashboard streamlit run \
+  src/energy_trading_pipeline/dashboard/app.py
+```
+
+The sidebar's **Exports directory** defaults to `reports/dashboard_exports`;
+set it to the configured export directory for a custom report location. Missing
+or malformed exports produce an error message rather than running the pipeline.
+
+The strategy filter applies to the stored RMSE/MAE summary and all five views:
+forecast vs actual, rolling RMSE, retraining events, model version changes, and
+strategy comparison. Model metadata is limited to versions referenced by the
+selected forecasts or events. Charts retain gaps for unavailable observations
+and scores; tables include stored retraining counts and frequency per day.
+All timestamps are UTC. No credentials, model weights, ingestion, training,
+backtesting, retraining, or AWS operations are required or invoked.
+
+The app only reads the four exported Parquet files. It does not recalculate
+metrics, write research artifacts, or run experiments. Importing its modules
+does not require the optional Streamlit dependency. To run the fixture chart and
+Streamlit smoke tests, use:
+
+```bash
+uv run --extra dashboard --extra test pytest -q \
+  tests/unit/test_dashboard_charts.py tests/unit/test_dashboard_data_loader.py
+```
+
 ## Tests
 
 Install the test dependencies and run the local fixture suite:

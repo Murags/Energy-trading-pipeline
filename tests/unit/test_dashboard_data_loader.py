@@ -1,5 +1,6 @@
 """Read-only dashboard loading checks using small exported Parquet fixtures."""
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -62,6 +63,117 @@ def dashboard_exports(tmp_path, dashboard_frames):
     for name, frame in dashboard_frames.items():
         frame.to_parquet(exports_dir / f"{name}.parquet", index=False)
     return exports_dir
+
+
+@pytest.fixture
+def streamlit_exports(dashboard_exports, dashboard_frames):
+    strategies = ["no_retraining", "fixed_schedule", "performance_triggered"]
+    frames = {name: frame.copy() for name, frame in dashboard_frames.items()}
+    for name in ("forecasts", "metrics"):
+        frames[name] = pd.concat(
+            [frames[name].assign(strategy=strategy) for strategy in strategies],
+            ignore_index=True,
+        )
+    frames["forecasts"].loc[3, "model_version"] = "new_model"
+    frames["retraining_events"] = frames["retraining_events"].iloc[-1:].copy()
+    frames["retraining_events"]["model_version"] = "new_model"
+    frames["model_versions"] = pd.DataFrame({
+        "model_version": ["fixture_model", "new_model"],
+        "model_type": ["xgboost", "xgboost"],
+    })
+    for name, frame in frames.items():
+        frame.to_parquet(dashboard_exports / f"{name}.parquet", index=False)
+    return dashboard_exports
+
+
+def run_dashboard(monkeypatch, working_dir):
+    testing = pytest.importorskip("streamlit.testing.v1")
+    monkeypatch.chdir(working_dir)
+    for name in ("ENTSOE_API_KEY", "ENTSOE_API_TOKEN", "AWS_ACCESS_KEY_ID",
+                 "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    app_path = (
+        Path(__file__).resolve().parents[2]
+        / "src/energy_trading_pipeline/dashboard/app.py"
+    )
+    return testing.AppTest.from_file(str(app_path)).run(timeout=15)
+
+
+def test_streamlit_dashboard_views_filters_and_read_only_exports(
+    streamlit_exports, monkeypatch
+):
+    before = {path: path.read_bytes() for path in streamlit_exports.iterdir()}
+    app = run_dashboard(monkeypatch, streamlit_exports.parents[1])
+    assert not app.exception
+    assert not app.error
+    assert [tab.label for tab in app.tabs] == [
+        "Forecasts", "Rolling RMSE", "Retraining", "Models", "Comparison",
+    ]
+    assert len(app.get("plotly_chart")) == 5
+    assert len(app.dataframe) == 6
+    assert app.dataframe[0].value["rmse"].tolist() == [123.0] * 3
+    assert app.dataframe[0].value["mae"].tolist() == [456.0] * 3
+    app.sidebar.multiselect[0].set_value(["no_retraining"]).run()
+    assert not app.exception
+    for table in app.dataframe:
+        if "strategy" in table.value:
+            assert set(table.value["strategy"]) <= {"no_retraining"}
+        if "model_type" in table.value:
+            assert set(table.value["model_version"]) == {"fixture_model"}
+    for element in app.get("plotly_chart"):
+        figure = json.loads(element.proto.spec)
+        for trace in figure["data"]:
+            if trace["type"] == "scatter":
+                assert "no_retraining" in trace["name"]
+    assert any("No retraining events" in info.value for info in app.info)
+    app.sidebar.multiselect[0].set_value([]).run()
+    assert not app.exception
+    assert any("No strategies selected" in info.value for info in app.info)
+    assert not app.get("plotly_chart")
+    assert {path: path.read_bytes() for path in streamlit_exports.iterdir()} == before
+
+
+@pytest.mark.parametrize("scenario", ["empty", "no_events", "no_scores"])
+def test_streamlit_dashboard_handles_sparse_exports(
+    streamlit_exports, monkeypatch, scenario
+):
+    for path in streamlit_exports.iterdir():
+        frame = pd.read_parquet(path)
+        if scenario == "empty" or (
+            scenario == "no_events" and path.stem == "retraining_events"
+        ):
+            frame = frame.iloc[:0]
+        elif scenario == "no_scores":
+            if path.stem == "forecasts":
+                frame[["actual", "rolling_rmse"]] = np.nan
+            elif path.stem == "metrics":
+                frame[["rmse", "mae"]] = np.nan
+        frame.to_parquet(path, index=False)
+    app = run_dashboard(monkeypatch, streamlit_exports.parents[1])
+    assert not app.exception
+    assert not app.error
+    if scenario == "empty":
+        assert any("No exported strategies" in info.value for info in app.info)
+    elif scenario == "no_events":
+        assert any("No retraining events" in info.value for info in app.info)
+    else:
+        assert app.dataframe[0].value[["rmse", "mae"]].isna().all().all()
+        assert any("Rolling RMSE unavailable" in info.value for info in app.info)
+
+
+def test_streamlit_dashboard_missing_exports_and_custom_directory(
+    streamlit_exports, tmp_path, monkeypatch
+):
+    working_dir = tmp_path / "other"
+    working_dir.mkdir()
+    app = run_dashboard(monkeypatch, working_dir)
+    assert not app.exception
+    assert len(app.error) == 1
+    assert "export-dashboard" in app.error[0].value
+    app.sidebar.text_input[0].set_value(str(streamlit_exports)).run()
+    assert not app.exception
+    assert not app.error
+    assert len(app.get("plotly_chart")) == 5
 
 
 def test_loads_default_exports_without_changing_files(
@@ -197,8 +309,12 @@ def test_invalid_timestamps_identify_file_and_column(
     assert column in str(caught.value)
 
 
-def test_loader_never_imports_pipeline_stages(dashboard_exports):
+@pytest.mark.parametrize("module_name", ["data_loader", "app", "charts"])
+def test_dashboard_modules_never_import_pipeline_stages(
+    dashboard_exports, module_name
+):
     code = """
+import importlib
 import importlib.abc
 import sys
 
@@ -210,16 +326,19 @@ class BlockPipelineImports(importlib.abc.MetaPathFinder):
             'energy_trading_pipeline.data_ingestion',
             'energy_trading_pipeline.retraining',
             'energy_trading_pipeline.evaluation',
+            'streamlit',
         )
         if fullname.startswith(forbidden):
             raise AssertionError('Forbidden pipeline import: ' + fullname)
 
 sys.meta_path.insert(0, BlockPipelineImports())
+module = importlib.import_module('energy_trading_pipeline.dashboard.' + sys.argv[2])
 from energy_trading_pipeline.dashboard.data_loader import load_dashboard_artifacts
-assert len(load_dashboard_artifacts(sys.argv[1])) == 4
+if sys.argv[2] == 'data_loader':
+    assert len(load_dashboard_artifacts(sys.argv[1])) == 4
 """
     result = subprocess.run(
-        [sys.executable, "-c", code, str(dashboard_exports)],
+        [sys.executable, "-c", code, str(dashboard_exports), module_name],
         cwd=dashboard_exports,
         env=os.environ | {
             "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src"),
@@ -227,5 +346,6 @@ assert len(load_dashboard_artifacts(sys.argv[1])) == 4
         capture_output=True,
         text=True,
         check=False,
+        timeout=15,
     )
     assert result.returncode == 0, result.stdout + result.stderr
