@@ -383,7 +383,7 @@ directory traversal. Re-exporting replaces only that run's tables. Inputs are
 validated before output directories are created and are never mutated.
 
 This API does not execute backtests or retraining and adds no CLI command.
-Exports to `reports/dashboard_exports/` remain the scope of Story 8.4.
+Use the separate Dashboard Exports command below for dashboard-ready outputs.
 
 ### Evaluation Figures
 
@@ -446,7 +446,70 @@ reports/figures/strategy_comparison/<run_id>.png
 ```
 
 Re-rendering replaces only the selected run's figures. Safe run IDs follow the
-same rules as comparison tables. No CLI command or dashboard export is added.
+same rules as comparison tables. Plotting does not write dashboard exports.
+
+### Dashboard Exports
+
+Export saved results independently after backtesting and evaluation:
+
+```bash
+uv run python -m energy_trading_pipeline.cli export-dashboard \
+  --config configs/experiment.yaml \
+  --paths-config configs/local_paths.yaml \
+  --forecasts logs/runs/<run_id>/forecasts.parquet \
+  --metrics reports/tables/<run_id>/strategy_comparison.parquet \
+  --retraining-events logs/runs/<run_id>/retraining_events.parquet \
+  --model-index models/registry/models_index.yaml
+```
+
+Replace `<run_id>` with the selected saved run. `paths.reports_dir` is required,
+either inline in the experiment YAML or in the explicit paths companion file.
+Relative configured paths resolve against the repository root. Explicit artifact
+flags resolve relative to the current working directory. All table inputs are
+Parquet; the metrics input is Story 8.2's saved eight-column comparison table.
+Forecasts must have the complete canonical forecast-log schema, including
+issuance and error columns; events must have the full completed-event schema.
+For a static backtest, supply an explicitly saved empty canonical event table.
+
+The static backtest command does not update the training registry. For its model,
+replace `--model-index` with `--run-metadata logs/runs/<run_id>/run_metadata.yaml`.
+Repeat `--run-metadata` for every referenced version when combining saved results.
+Choose either registry or run metadata, not both. No model weights are loaded.
+The registry must contain metadata for every selected forecast/event version.
+Run metadata must contain `model_version` and `config.model.type`.
+
+Optionally pass `--rolling-rmse <saved_monitoring.parquet>`, with `timestamp`,
+`strategy`, and `rolling_rmse`. These are stored decision-time values, joined on
+exact timestamp/strategy keys present in the selected forecast timeline. They
+are not recalculated or shifted to an earlier time. Sparse monitoring is allowed;
+unavailable history and omitted monitoring remain `NaN`, not zero. Unmatched or
+duplicate monitoring keys fail explicitly.
+
+The command writes exactly these files under `<reports_dir>/dashboard_exports/`:
+
+| Artifact | Columns |
+| --- | --- |
+| `forecasts.parquet` | `timestamp`, `prediction`, `actual`, `strategy`, `model_version`, `rolling_rmse` |
+| `metrics.parquet` | `run_id`, `evaluation_start`, `evaluation_end`, `strategy`, `rmse`, `mae`, `retraining_count`, `retraining_frequency` |
+| `retraining_events.parquet` | `timestamp`, `strategy`, `trigger_reason`, `threshold`, `rolling_rmse`, `model_version` |
+| `model_versions.parquet` | `model_version`, `model_type` |
+
+All timestamps are aware UTC. Forecast and event rows are chronological and
+limited to the comparison table's half-open evaluation window. Strategies must
+share evaluation timestamps and actuals. Stored aggregate metrics are copied,
+not recomputed; frequency remains completed retraining events per elapsed UTC
+day. Only referenced model metadata is exported, without feature lists, model
+parameters, filesystem paths, or weights. Model changes can be reviewed through
+the timestamped forecast/event version columns; creation times are not inferred.
+
+Repeated exports replace the four-file dashboard snapshot, not the source logs
+or per-run comparison tables. Validation failures leave existing exports intact;
+source/output path collisions are rejected. Treat this as a single-writer export
+and do not read the snapshot concurrently while its four files are being written.
+Empty artifacts retain typed schemas. This command does not run ingestion,
+preprocessing, training, backtesting, retraining, dashboard code, or AWS operations.
+No new run directory is created. Use the same saved results to call the reusable
+`evaluation.exports.write_dashboard_exports` dataframe API when needed.
 
 ## Tests
 
