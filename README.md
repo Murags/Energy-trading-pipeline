@@ -190,7 +190,7 @@ owns execution, model-version metadata, and persistence.
 
 The programmatic runner accepts this hook but still raises `NotImplementedError`
 on a positive decision because retraining execution is not yet implemented.
-This policy does not implement the later event writer or performance trigger.
+The performance policy and shared event writer below are separate from execution.
 
 ### Rolling RMSE Monitor
 
@@ -225,8 +225,78 @@ Select one strategy and one issuance per target before calling the monitor;
 mixed strategies and duplicate observed targets fail clearly. Model-version
 changes do not reset error history, and the input dataframe remains unchanged.
 
-The monitor only calculates the metric. Performance-triggered decisions,
-retraining execution, and persisted event records remain later story work.
+The monitor only calculates the metric; the policy below makes decisions.
+
+### Performance-Triggered Policy and Events
+
+`PerformanceTriggeredPolicy.from_config(config)` reads
+`retraining.rolling_rmse_threshold` and `retraining.rolling_rmse_window_days`.
+The existing experiment configuration sets these to `10.0` and `7`. The threshold
+must be finite and non-negative. A decision returns `True` only when observed
+rolling RMSE is **strictly greater** than the threshold. Equality, lower values,
+and insufficient history return `False`. PSI never influences the decision.
+
+Use `policy.should_retrain(decision_timestamp, forecast_history)` or the standard
+boolean hook. Create a fresh policy for each run, pass only this strategy's
+canonical observable history, and request decisions chronologically. The existing
+monitor's window and readiness rules apply; `from_config(config, min_periods=1)`
+supports small debug histories. The policy does not reset error history or impose
+a cooldown: each decision evaluates the available rolling errors again.
+
+For an auditable request, supply all three optional callbacks. The caller provides
+the exact candidate training windows, the active or intended model-version label,
+and the configured run directory:
+
+```python
+import pandas as pd
+
+from energy_trading_pipeline.retraining.events import (
+  RETRAINING_EVENT_COLUMNS,
+  write_retraining_events,
+)
+from energy_trading_pipeline.retraining.performance_triggered import (
+  PerformanceTriggeredPolicy,
+)
+
+policy = PerformanceTriggeredPolicy.from_config(config)
+requests = []
+hook = policy.as_policy_hook(
+  training_window_provider=training_windows.__getitem__,
+  model_version_provider=lambda issuance: active_model_version,
+  event_logger=requests.append,
+)
+needs_retraining = hook(decision_timestamp, forecast_history)
+write_retraining_events(
+  pd.DataFrame(requests, columns=RETRAINING_EVENT_COLUMNS),
+  run_directory / "retraining_events.parquet",
+)
+```
+
+Positive decisions emit `timestamp`, `strategy`, `trigger_reason`
+(`rolling_rmse_exceeds_threshold`), `threshold`, `rolling_rmse`,
+`training_window_start`, `training_window_end`, and `model_version`. Windows are
+half-open and must end at or before the decision. Callback failures propagate.
+These records are **requests**, not evidence of a successful refit. Only the
+caller can confirm training success and record the actual registered replacement
+version; the policy never invents model versions from forecast history.
+
+`build_retraining_events` validates and sorts a complete event dataframe without
+mutating it. `write_retraining_events` writes it as Parquet with UTC timestamps,
+creating parent directories after validation. Pass the configured path under
+`logs/runs/run_YYYYMMDD_HHMMSS/`. Writing replaces the existing artifact; explicitly
+accumulate the full log rather than treating the writer as an append operation.
+Empty logs retain the same schema. For fixed-schedule records, flatten the existing
+`training_window` handoff, supply the model version, and leave inapplicable
+`threshold` and `rolling_rmse` values missing.
+
+The CLI remains static-only, and the programmatic runner still rejects positive
+refit requests with `NotImplementedError`. This story adds policy decisions and
+event persistence, not retraining execution or model lifecycle changes.
+
+```bash
+uv run pytest tests/unit/test_retraining_policies.py \
+  tests/unit/test_retraining_events.py tests/unit/test_rolling_rmse.py
+```
 
 ## Tests
 
