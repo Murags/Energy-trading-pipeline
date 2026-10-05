@@ -511,6 +511,37 @@ preprocessing, training, backtesting, retraining, dashboard code, or AWS operati
 No new run directory is created. Use the same saved results to call the reusable
 `evaluation.exports.write_dashboard_exports` dataframe API when needed.
 
+### Dashboard Artifact Loader
+
+Read the saved snapshot without running any pipeline stage:
+
+```python
+from pathlib import Path
+from energy_trading_pipeline.dashboard.data_loader import (
+  DashboardArtifactError,
+  load_dashboard_artifacts,
+)
+
+try:
+  artifacts = load_dashboard_artifacts(Path("reports/dashboard_exports"))
+  forecasts = artifacts["forecasts"]
+  metrics = artifacts["metrics"]
+  events = artifacts["retraining_events"]
+  models = artifacts["model_versions"]
+except DashboardArtifactError as error:
+  print(error)
+```
+
+The same directory is the default, relative to the working directory. For custom
+report locations, pass the configured `<reports_dir>/dashboard_exports` path.
+All four files and their columns listed above are required, even for empty
+tables. Additional columns are excluded from the returned DataFrames. Timestamps
+are normalized to nanosecond UTC, rows are sorted for display, and indexes are
+reset; naive timestamps are interpreted as UTC. Stored predictions, metrics,
+and missing values are preserved, not recomputed. Missing, unreadable, or
+malformed exports raise file-specific `DashboardArtifactError` messages.
+The loader never writes files, loads model weights, or imports pipeline stages.
+
 ## Tests
 
 Install the test dependencies and run the local fixture suite:
