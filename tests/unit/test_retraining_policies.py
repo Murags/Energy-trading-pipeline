@@ -8,6 +8,9 @@ from energy_trading_pipeline.backtesting.splitter import TimeWindow
 from energy_trading_pipeline.config.loader import load_config
 from energy_trading_pipeline.retraining.fixed_schedule import FixedSchedulePolicy
 from energy_trading_pipeline.retraining.no_retraining import NoRetrainingPolicy
+from energy_trading_pipeline.retraining.performance_triggered import (
+    PerformanceTriggeredPolicy,
+)
 from energy_trading_pipeline.retraining.policies import RetrainingPolicy
 
 
@@ -317,3 +320,130 @@ def test_fixed_schedule_does_not_mutate_history_when_triggering():
 
     assert policy.should_retrain(pd.Timestamp("2024-01-02T00:00:00Z"), history) is True
     pd.testing.assert_frame_equal(history, original)
+
+
+@pytest.mark.parametrize(
+    ("threshold", "expected"), [(2.0, False), (1.0, False), (0.5, True)]
+)
+def test_performance_triggered_threshold_boundaries(threshold, expected):
+    policy = PerformanceTriggeredPolicy(threshold=threshold, min_periods=1)
+    history = make_history(
+        ["2024-01-01T12:00:00Z"], strategy="performance_triggered"
+    )
+    original = history.copy(deep=True)
+
+    assert policy.strategy == "performance_triggered"
+    assert (
+        policy.should_retrain(pd.Timestamp("2024-01-02T00:00:00Z"), history)
+        is expected
+    )
+    pd.testing.assert_frame_equal(history, original)
+
+
+def test_performance_triggered_insufficient_history_does_not_trigger(empty_history):
+    policy = PerformanceTriggeredPolicy(threshold=0.5)
+    decision = pd.Timestamp("2024-01-02T00:00:00Z")
+    assert policy.should_retrain(decision, empty_history) is False
+    history = make_history(
+        ["2024-01-01T12:00:00Z"], strategy="performance_triggered"
+    )
+    assert policy.should_retrain(decision, history) is False
+
+
+def test_performance_triggered_ignores_psi(empty_history):
+    policy = PerformanceTriggeredPolicy(threshold=2.0, min_periods=1)
+    history = make_history(
+        ["2024-01-01T12:00:00Z"], strategy="performance_triggered"
+    )
+    history["psi"] = 1000.0
+    assert policy.should_retrain(pd.Timestamp("2024-01-02T00:00:00Z"), history) is False
+
+
+def test_performance_triggered_loads_threshold_and_window_from_config():
+    config = load_config("configs/experiment.yaml")
+    config["retraining"]["rolling_rmse_threshold"] = 0.5
+    config["retraining"]["rolling_rmse_window_days"] = 1
+    policy = PerformanceTriggeredPolicy.from_config(config, min_periods=1)
+    history = make_history(
+        ["2024-01-01T12:00:00Z"], strategy="performance_triggered"
+    )
+    assert policy.as_policy_hook()(pd.Timestamp("2024-01-02T00:00:00Z"), history)
+
+
+@pytest.mark.parametrize(
+    "threshold", [-1, float("nan"), float("inf"), -float("inf"), True, "1", None]
+)
+def test_performance_triggered_rejects_invalid_thresholds(threshold):
+    with pytest.raises(ValueError, match="threshold.*finite non-negative"):
+        PerformanceTriggeredPolicy(threshold=threshold)
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "7"])
+@pytest.mark.parametrize("setting", ["window_days", "min_periods"])
+def test_performance_triggered_rejects_invalid_monitor_settings(setting, value):
+    with pytest.raises(ValueError, match=f"{setting}.*positive integer"):
+        PerformanceTriggeredPolicy(threshold=1.0, **{setting: value})
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {},
+        {"retraining": None},
+        {"retraining": {}},
+        {"retraining": {"rolling_rmse_threshold": 1.0}},
+    ],
+)
+def test_performance_triggered_requires_monitor_config(config):
+    with pytest.raises(ValueError, match="retraining.rolling_rmse_"):
+        PerformanceTriggeredPolicy.from_config(config)
+
+
+def test_performance_triggered_zero_threshold_uses_observed_errors_only():
+    policy = PerformanceTriggeredPolicy(threshold=0.0, min_periods=1)
+    decision = pd.Timestamp("2024-01-02T00:00:00Z")
+    history = make_history(
+        ["2024-01-01T12:00:00Z"], strategy="performance_triggered"
+    )
+    history["error"] = float("nan")
+    assert policy.should_retrain(decision, history) is False
+    history["error"] = 0.0
+    assert policy.should_retrain(decision, history) is False
+    history["error"] = 1.0
+    assert policy.should_retrain(decision, history) is True
+
+
+@pytest.mark.parametrize("column", ["timestamp", "forecast_timestamp"])
+def test_performance_triggered_rejects_future_history(column):
+    policy = PerformanceTriggeredPolicy(threshold=0.5, min_periods=1)
+    history = make_history(
+        ["2024-01-01T12:00:00Z"], strategy="performance_triggered"
+    )
+    history[column] = pd.Timestamp("2024-01-03T00:00:00Z")
+    with pytest.raises(ValueError, match="must not follow decision_timestamp"):
+        policy.should_retrain(pd.Timestamp("2024-01-02T00:00:00Z"), history)
+
+
+def test_performance_triggered_window_and_default_readiness():
+    decision = pd.Timestamp("2024-01-02T00:00:00Z")
+    times = pd.date_range(end=decision, periods=25, freq="h")
+    history = make_history(
+        [timestamp.isoformat() for timestamp in times],
+        strategy="performance_triggered",
+    )
+    policy = PerformanceTriggeredPolicy(threshold=0.5, window_days=1)
+    assert policy.should_retrain(decision, history.iloc[:-1]) is False
+    assert policy.should_retrain(decision, history) is True
+    assert policy.rolling_rmse == 1.0
+    assert policy.should_retrain(decision + pd.Timedelta(days=1), history) is False
+    assert pd.isna(policy.rolling_rmse)
+
+
+def test_performance_triggered_rejects_backwards_decisions(empty_history):
+    policy = PerformanceTriggeredPolicy(threshold=1.0)
+    assert (
+        policy.should_retrain(pd.Timestamp("2024-01-02T00:00:00Z"), empty_history)
+        is False
+    )
+    with pytest.raises(ValueError, match="must not move backwards"):
+        policy.should_retrain(pd.Timestamp("2024-01-01T00:00:00Z"), empty_history)
