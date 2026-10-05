@@ -385,6 +385,69 @@ validated before output directories are created and are never mutated.
 This API does not execute backtests or retraining and adds no CLI command.
 Exports to `reports/dashboard_exports/` remain the scope of Story 8.4.
 
+### Evaluation Figures
+
+The four functions in `evaluation.plots` render stored evaluation artifacts using
+headless Matplotlib. They accept dataframes and an explicit output directory,
+return PNG paths, and do not calculate metrics or run any pipeline stage.
+Read existing artifacts, then pass the configured `reports_dir / "figures"`:
+
+```python
+import pandas as pd
+
+from energy_trading_pipeline.evaluation.plots import (
+  plot_forecasts_vs_actuals,
+  plot_rolling_rmse,
+  plot_retraining_events,
+  plot_strategy_comparison,
+)
+
+forecasts = pd.read_parquet(forecast_path)
+monitoring = pd.read_parquet(monitoring_path)
+completed_events = pd.read_parquet(event_path)
+comparison = pd.read_parquet(table_paths["parquet"])
+options = {"run_id": run_id, "figures_dir": reports_dir / "figures"}
+figure_paths = [
+  plot_forecasts_vs_actuals(forecasts, **options),
+  plot_rolling_rmse(monitoring, **options),
+  plot_retraining_events(completed_events, **options),
+  plot_strategy_comparison(comparison, **options),
+]
+```
+
+Use artifact paths from the selected run, and select the same evaluation period
+before plotting. CSV inputs loaded with `pd.read_csv` also work; timestamp strings
+must include timezone offsets. Required input columns are:
+
+| Figure | Required Columns |
+| --- | --- |
+| Forecasts vs actuals | `timestamp`, `strategy`, `prediction`, `actual` |
+| Rolling RMSE | `timestamp` (decision time), `strategy`, `rolling_rmse` |
+| Retraining events | `timestamp` (completed event time), `strategy` |
+| Strategy comparison | Story 8.2's complete eight-column comparison table |
+
+Rolling RMSE values must already be stored from monitoring; plotting does not
+derive them from errors or fill missing history. Supply completed retrains only,
+excluding initial training and unexecuted policy decisions. Missing actuals and
+rolling values remain gaps, unavailable comparison scores are labelled explicitly,
+and empty artifacts produce no-data figures. Forecast strategies must share target
+timestamps and actuals. Comparison rows must share one run and evaluation period;
+frequency remains completed retrains per elapsed UTC day, not per scored row.
+
+All aware timestamps are normalized to UTC and time-series rows sorted without
+mutating inputs. Validation precedes output creation. Figures use consistent
+strategy colors, labelled units, and 180-DPI PNG output under:
+
+```text
+reports/figures/forecasts_vs_actuals/<run_id>.png
+reports/figures/rolling_rmse/<run_id>.png
+reports/figures/retraining_events/<run_id>.png
+reports/figures/strategy_comparison/<run_id>.png
+```
+
+Re-rendering replaces only the selected run's figures. Safe run IDs follow the
+same rules as comparison tables. No CLI command or dashboard export is added.
+
 ## Tests
 
 Install the test dependencies and run the local fixture suite:
