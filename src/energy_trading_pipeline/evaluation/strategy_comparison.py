@@ -1,4 +1,7 @@
-"""In-memory core metric aggregation from canonical experiment logs."""
+"""Strategy metrics and report comparison tables from canonical experiment logs."""
+
+import re
+from pathlib import Path
 
 import pandas as pd
 
@@ -102,3 +105,73 @@ def calculate_strategy_metrics(
 			"retraining_frequency": "float64",
 		}
 	)
+
+
+def build_strategy_comparison(
+	forecasts: pd.DataFrame,
+	retraining_events: pd.DataFrame,
+	*,
+	run_id: str,
+	evaluation_start: pd.Timestamp,
+	evaluation_end: pd.Timestamp,
+) -> pd.DataFrame:
+	"""Add typed run and UTC evaluation metadata to the core strategy metrics.
+
+	Use the same half-open window, missing-actual handling, comparability guards,
+	and events-per-elapsed-day frequency as calculate_strategy_metrics. Run IDs
+	must be safe directory names containing letters, digits, underscores or
+	hyphens, starting with a letter or digit. No inputs are mutated or files written.
+	"""
+	if not isinstance(run_id, str) or not re.fullmatch(
+		r"[A-Za-z0-9][A-Za-z0-9_-]*", run_id
+	):
+		raise ValueError("run_id must be a nonempty safe directory name")
+	start = _evaluation_timestamp(evaluation_start, "evaluation_start")
+	end = _evaluation_timestamp(evaluation_end, "evaluation_end")
+	result = calculate_strategy_metrics(
+		forecasts, retraining_events, evaluation_start=start, evaluation_end=end
+	)
+	for position, (column, value, dtype) in enumerate(
+		(
+			("run_id", run_id, "string"),
+			("evaluation_start", start, "datetime64[ns, UTC]"),
+			("evaluation_end", end, "datetime64[ns, UTC]"),
+		)
+	):
+		result.insert(position, column, pd.Series(value, index=result.index, dtype=dtype))
+	return result
+
+
+def write_strategy_comparison(
+	forecasts: pd.DataFrame,
+	retraining_events: pd.DataFrame,
+	*,
+	run_id: str,
+	evaluation_start: pd.Timestamp,
+	evaluation_end: pd.Timestamp,
+	tables_dir: Path,
+) -> dict[str, Path]:
+	"""Build and write run-scoped Parquet and CSV comparison tables.
+
+	Pass the configured reports directory joined with ``tables``. Artifacts are
+	``tables_dir/run_id/strategy_comparison.{parquet,csv}``; both retain run ID,
+	UTC evaluation bounds, and canonical metrics. Validation precedes directory
+	creation. Repeated calls replace this run's tables, never other runs. Return
+	paths keyed by ``parquet`` and ``csv``. No dashboard exports are produced.
+	"""
+	result = build_strategy_comparison(
+		forecasts,
+		retraining_events,
+		run_id=run_id,
+		evaluation_start=evaluation_start,
+		evaluation_end=evaluation_end,
+	)
+	run_dir = Path(tables_dir) / run_id
+	paths = {
+		"parquet": run_dir / "strategy_comparison.parquet",
+		"csv": run_dir / "strategy_comparison.csv",
+	}
+	run_dir.mkdir(parents=True, exist_ok=True)
+	result.to_parquet(paths["parquet"], index=False)
+	result.to_csv(paths["csv"], index=False)
+	return paths

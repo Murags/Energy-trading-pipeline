@@ -337,6 +337,54 @@ retrains only, excluding initial training and unexecuted policy requests: the
 event schema does not prove execution success. This API performs no training,
 file exports, or CLI changes; the runner's existing execution limit still applies.
 
+### Strategy Comparison Tables
+
+`build_strategy_comparison` adds `run_id`, `evaluation_start`, and
+`evaluation_end` to the core strategy metrics. Evaluation bounds are stored as
+timezone-aware UTC nanosecond timestamps and describe the same half-open window
+used to calculate the metrics. Strategy identifiers and deterministic ordering
+are preserved. Empty logs retain the typed schema; missing scored actuals remain
+`NaN`, not zero. Directional accuracy is optional and is not implemented here.
+
+Export canonical forecast and **completed** retraining-event dataframes after
+backtesting, using the `reports_dir` path configured in `configs/local_paths.yaml`:
+
+```python
+import pandas as pd
+
+from energy_trading_pipeline.evaluation.strategy_comparison import (
+  write_strategy_comparison,
+)
+
+table_paths = write_strategy_comparison(
+  forecasts,
+  completed_retraining_events,
+  run_id=run_id,
+  evaluation_start=evaluation_start,
+  evaluation_end=evaluation_end,
+  tables_dir=reports_dir / "tables",
+)
+comparison = pd.read_parquet(table_paths["parquet"])
+```
+
+The writer returns `parquet` and `csv` paths under
+`reports/tables/<run_id>/strategy_comparison.parquet` and
+`reports/tables/<run_id>/strategy_comparison.csv`. Both exports contain exactly
+`run_id`, `evaluation_start`, `evaluation_end`, `strategy`, `rmse`, `mae`,
+`retraining_count`, and `retraining_frequency`, without a dataframe index.
+Frequency remains completed retraining events per elapsed UTC day.
+
+Parquet preserves types for subsequent artifact-only dashboard consumption; CSV
+provides report-readable values with explicit UTC offsets. When reading CSV,
+parse the two evaluation columns with `pd.to_datetime(..., utc=True)` and use
+string dtypes for `run_id` and `strategy`. Run IDs must start with a letter or
+digit and contain only letters, digits, underscores, or hyphens, preventing
+directory traversal. Re-exporting replaces only that run's tables. Inputs are
+validated before output directories are created and are never mutated.
+
+This API does not execute backtests or retraining and adds no CLI command.
+Exports to `reports/dashboard_exports/` remain the scope of Story 8.4.
+
 ## Tests
 
 Install the test dependencies and run the local fixture suite:

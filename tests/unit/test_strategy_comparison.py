@@ -6,6 +6,7 @@ import pytest
 
 from energy_trading_pipeline.backtesting.forecast_log import build_forecast_log
 from energy_trading_pipeline.evaluation.strategy_comparison import (
+    build_strategy_comparison,
     calculate_strategy_metrics,
 )
 from energy_trading_pipeline.retraining.events import (
@@ -318,3 +319,72 @@ def test_duplicate_column_names_fail(forecasts, events, source):
     inputs[source] = pd.concat([frame, frame[["strategy"]]], axis=1)
     with pytest.raises(ValueError, match="Duplicate.*column"):
         aggregate(**inputs)
+
+
+def test_build_comparison_includes_run_and_utc_period(forecasts, events):
+    original_forecasts = forecasts.copy(deep=True)
+    original_events = events.copy(deep=True)
+    result = build_strategy_comparison(
+        forecasts,
+        events,
+        run_id="run_20241005_120000",
+        evaluation_start=START.tz_convert("Europe/Berlin"),
+        evaluation_end=END.tz_convert("Europe/Berlin"),
+    )
+    assert list(result.columns) == [
+        "run_id", "evaluation_start", "evaluation_end", *METRIC_COLUMNS
+    ]
+    assert result["run_id"].tolist() == ["run_20241005_120000"] * 3
+    assert (result["evaluation_start"] == START).all()
+    assert (result["evaluation_end"] == END).all()
+    assert str(result["evaluation_start"].dtype) == "datetime64[ns, UTC]"
+    assert str(result["evaluation_end"].dtype) == "datetime64[ns, UTC]"
+    assert str(result["run_id"].dtype) == "string"
+    pd.testing.assert_frame_equal(result[METRIC_COLUMNS], aggregate(forecasts, events))
+    pd.testing.assert_frame_equal(forecasts, original_forecasts)
+    pd.testing.assert_frame_equal(events, original_events)
+
+
+def test_build_comparison_empty_logs_retain_typed_schema(forecasts, events):
+    result = build_strategy_comparison(
+        forecasts.iloc[:0],
+        events.iloc[:0],
+        run_id="run_20241005_120000",
+        evaluation_start=START,
+        evaluation_end=END,
+    )
+    assert result.empty
+    assert list(result.columns) == [
+        "run_id", "evaluation_start", "evaluation_end", *METRIC_COLUMNS
+    ]
+    assert str(result["run_id"].dtype) == "string"
+    assert str(result["evaluation_start"].dtype) == "datetime64[ns, UTC]"
+    assert str(result["evaluation_end"].dtype) == "datetime64[ns, UTC]"
+    pd.testing.assert_frame_equal(
+        result[METRIC_COLUMNS], aggregate(forecasts.iloc[:0], events.iloc[:0])
+    )
+
+
+@pytest.mark.parametrize(
+    "run_id", [None, 123, "", " ", "../run", "run/other", "run\\other", ".", ".."]
+)
+def test_build_comparison_rejects_unsafe_run_ids(forecasts, events, run_id):
+    with pytest.raises(ValueError, match="run_id"):
+        build_strategy_comparison(
+            forecasts,
+            events,
+            run_id=run_id,
+            evaluation_start=START,
+            evaluation_end=END,
+        )
+
+
+def test_build_comparison_preserves_comparability_validation(forecasts, events):
+    with pytest.raises(ValueError, match="same evaluation timeline"):
+        build_strategy_comparison(
+            forecasts.iloc[1:],
+            events,
+            run_id="run_20241005_120000",
+            evaluation_start=START,
+            evaluation_end=END,
+        )
