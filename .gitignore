@@ -17,6 +17,15 @@ __pycache__/
 # Environment secrets
 .env
 
+# Local Terraform working data
+infrastructure/terraform/.terraform/
+infrastructure/terraform/*.tfstate
+infrastructure/terraform/*.tfstate.*
+infrastructure/terraform/*.tfplan
+infrastructure/terraform/*.tfvars
+infrastructure/terraform/*.tfvars.json
+infrastructure/terraform/crash.log
+
 # Generated run artifacts
 data/features/*.parquet
 data/features/*.metadata.yaml
