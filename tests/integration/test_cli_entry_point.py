@@ -1,5 +1,6 @@
 """Integration tests for the CLI entry point."""
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -44,3 +45,26 @@ def test_cli_requires_config_argument():
         main([])
 
     assert exc_info.value.code != 0
+
+
+def test_local_cli_ignores_enabled_aws_without_sdk(tmp_path, monkeypatch):
+    """Even enabled mirroring config must not make local execution import AWS."""
+    config = yaml.safe_load(FIXTURE_CONFIG_PATH.read_text())
+    config["aws"] = {
+        "enabled": True,
+        "bucket_name": "research-artifacts",
+        "prefixes": {"reports": "reports/"},
+    }
+    config_path = tmp_path / "experiment.yaml"
+    config_path.write_text(yaml.safe_dump(config))
+    monkeypatch.setattr(
+        "energy_trading_pipeline.cli.get_default_base_dir", lambda: tmp_path
+    )
+    monkeypatch.setitem(sys.modules, "boto3", None)
+    monkeypatch.setitem(sys.modules, "botocore", None)
+
+    assert main(["--config", str(config_path)]) == 0
+    metadata_paths = list((tmp_path / "logs/runs").glob("*/run_metadata.yaml"))
+    assert len(metadata_paths) == 1
+    metadata = yaml.safe_load(metadata_paths[0].read_text())
+    assert metadata["config"]["aws"] == config["aws"]

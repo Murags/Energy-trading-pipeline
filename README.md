@@ -32,6 +32,10 @@ Python 3.11 or newer is supported. Add optional extras only when needed; when
 syncing, include any previously selected extras that you want to keep installed.
 Docker and AWS are not required for local development or evaluation.
 
+Optional S3 copying is available as a standalone, explicitly invoked utility.
+See [artifact mirroring](docs/artifact_mirroring.md) for disabled defaults,
+configuration, selected-file invocation, and mocked AWS test commands.
+
 ## Docker (Optional)
 
 After local setup works, Docker can provide an alternative reproducible
