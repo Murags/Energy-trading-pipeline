@@ -1,5 +1,63 @@
 # Real Research Datasets
 
+## 2022-2025 Prices and Weather
+
+At the user's request, the local-market years 2022 through 2025 were downloaded
+on 2026-10-06 with the same procedures as the 2024 runs below. These are the
+default inputs for `notebooks/03_model_training_validation.ipynb` through
+`configs/experiment_2022_2025.yaml` and `configs/local_paths_2022_2025.yaml`.
+
+| Artifact | Run | Rows |
+| --- | --- | ---: |
+| Prices `prices_de_fr.{csv,parquet}`, `price_de.csv`, `price_fr.csv` | `run_20261006_072807` | 35,064 |
+| Weather `weather_2022_2025_locations.*`, `weather_2022_2025_country_aggregates.*` | `run_20261006_073531` | 35,064 |
+
+- [Price metadata, yearly statistics, and checks](../data/processed/run_20261006_072807/metadata.json)
+- [Price verification](../data/processed/run_20261006_072807/verification.json)
+- [Weather metadata and checks](../data/processed/run_20261006_073531/metadata.json)
+- Raw responses, manifests, and the acquisition scripts:
+  `data/raw/smard/prices/run_20261006_072807/` and
+  `data/raw/open_meteo/weather/run_20261006_073531/`
+
+Coverage is January 1, 2022 at 00:00 through January 1, 2026 at 00:00 local
+time, end exclusive; stored UTC timestamps run from `2021-12-31T23:00:00Z`
+inclusive to `2025-12-31T23:00:00Z` exclusive. Both markets have exactly the
+same 35,064 hourly UTC timestamps with no missing hours, duplicates, or missing
+values. 432 source-response checksums and all export checksums
+were re-verified, and every CSV/Parquet export round-trips through
+`load_local_data`. No gaps were filled; negative and extreme prices are kept.
+
+| Local year | Hours | Mean DE | Mean FR | DE min / max | FR min / max | Negative hours DE / FR |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2022 | 8,760 | 235.45 | 275.88 | -19.04 / 871.00 | -1.44 / 2987.78 | 69 / 4 |
+| 2023 | 8,760 | 95.18 | 96.86 | -500.00 / 524.27 | -134.94 / 276.12 | 301 / 147 |
+| 2024 | 8,784 | 78.51 | 58.02 | -135.45 / 936.28 | -87.29 / 284.21 | 457 / 352 |
+| 2025 | 8,760 | 89.32 | 61.07 | -250.32 / 583.40 | -118.01 / 473.28 | 573 / 509 |
+
+All prices are EUR/MWh.
+
+**Consistency with the 2024 runs.** The overlapping 2024 hours are identical to
+`run_20260911_053845` (all 8,784 prices, zero difference) and to the
+`run_20260913_132539` country weather aggregates (zero difference), which
+confirms the procedure and weights were reproduced exactly.
+
+**Quarter-hour market change.** From delivery day October 1, 2025 the day-ahead
+auction clears 15-minute products. SMARD continues to publish the hourly series
+used here. For the first two weeks after the switch, every hourly value equals
+the mean of its four quarter-hour prices within 0.005 EUR/MWh (rounding), so
+late-2025 hourly prices are hourly averages of quarter-hour prices rather than
+hourly auction results.
+
+**Weather.** Same eight ERA5 locations, four variables, and aggregation as the
+2024 run. The regional weights are the 2024 capacity (Germany) and generation
+(France) figures, applied unchanged to every year; installed capacity grew over
+the period, so earlier years are weighted with slightly later geography. The
+ERA5 leakage note below applies: same-hour weather is not a valid predictor.
+
+**2022 regime.** 2022 includes the energy crisis and French nuclear outages:
+French prices reach 2,987.78 EUR/MWh and the spread reaches about
+-2,900 EUR/MWh in April 2022. These values are genuine and are retained.
+
 ## Full-Year 2024 Weather
 
 At the user's request, ERA5 hourly weather for eight representative German and

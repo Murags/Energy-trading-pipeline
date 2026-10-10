@@ -1,0 +1,82 @@
+data:
+  target_column: spread
+  timestamp_column: timestamp
+  input_format: parquet
+  cleaning:
+    duplicate_policy: raise
+    required_missing_policy: raise
+dates:
+  # Cached SMARD/ERA5 artifacts follow the local-market years 2022-2025 in UTC:
+  # 2021-12-31T23:00Z through 2025-12-31T22:00Z.
+  start_date: "2022-01-01"
+  end_date: "2025-12-31"
+  # Training rows must precede validation rows; both ranges are end-inclusive.
+  # The first two UTC days are lag warm-up for weather and price features.
+  train_start_date: "2022-01-03"
+  train_end_date: "2024-12-31"
+  validation_start_date: "2025-01-01"
+  validation_end_date: "2025-12-31"
+features:
+  lag_hours: [1, 24]
+  rolling_window_hours: [24]
+  calendar_features: [hour, day_of_week, month, is_weekend, is_holiday]
+  # National public holidays shared by Germany and France: New Year, Easter
+  # Monday, Labour Day, Ascension, Whit Monday, Christmas Day.
+  holiday_dates:
+    - "2022-01-01"
+    - "2022-04-18"
+    - "2022-05-01"
+    - "2022-05-26"
+    - "2022-06-06"
+    - "2022-12-25"
+    - "2023-01-01"
+    - "2023-04-10"
+    - "2023-05-01"
+    - "2023-05-18"
+    - "2023-05-29"
+    - "2023-12-25"
+    - "2024-01-01"
+    - "2024-04-01"
+    - "2024-05-01"
+    - "2024-05-09"
+    - "2024-05-20"
+    - "2024-12-25"
+    - "2025-01-01"
+    - "2025-04-21"
+    - "2025-05-01"
+    - "2025-05-29"
+    - "2025-06-09"
+    - "2025-12-25"
+  # ERA5 reanalysis source columns. Same-hour values are never predictors:
+  # notebook 03 lags each column by features.lag_hours before selection
+  # (docs/data_sources.md, ERA5 leakage note).
+  weather_columns:
+    - temperature_2m_c_de_mean
+    - wind_speed_10m_m_s_de_weighted
+    - wind_speed_100m_m_s_de_weighted
+    - shortwave_radiation_w_m2_de_weighted
+    - temperature_2m_c_fr_mean
+    - wind_speed_10m_m_s_fr_weighted
+    - wind_speed_100m_m_s_fr_weighted
+    - shortwave_radiation_w_m2_fr_weighted
+  grid_columns: []
+model:
+  type: xgboost
+  target_column: spread
+backtest:
+  # Inclusive UTC calendar dates; generated intervals have exclusive ends.
+  evaluation_start_date: "2025-01-01"
+  evaluation_end_date: "2025-12-30"
+  train_window_days: 90
+  validation_window_days: 7
+  forecast_horizon_hours: 24
+retraining:
+  strategy: fixed_schedule
+  fixed_schedule_interval_days: 7
+  rolling_rmse_window_days: 7
+  rolling_rmse_threshold: 10.0
+evaluation:
+  metrics: [rmse, mae]
+artifacts:
+  run_prefix: run
+  output_format: parquet
