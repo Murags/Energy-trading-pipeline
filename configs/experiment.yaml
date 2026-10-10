@@ -42,3 +42,14 @@ evaluation:
 artifacts:
   run_prefix: run
   output_format: parquet
+# Standalone artifact copying only; local CLI stages never invoke AWS.
+# Enable in a local config copy and set your bucket before calling mirror_artifacts.
+aws:
+  enabled: false
+  bucket_name: null
+  region: eu-central-1
+  # Local roots -> S3 prefixes. Relative roots resolve against the explicit base_dir.
+  prefixes:
+    models: models/
+    logs: logs/
+    reports: reports/
