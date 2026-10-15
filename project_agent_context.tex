@@ -1,0 +1,225 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}
+\setlist[itemize]{leftmargin=1.5em,itemsep=2pt,topsep=3pt}
+\setlist[enumerate]{leftmargin=1.7em,itemsep=2pt,topsep=3pt}
+\title{Project Context for AI Coding Agents\\[0.4em]
+\large Mitigating Forecast Degradation in German--French Electricity Spreads Using Performance-Triggered Retraining}
+\author{Mukoma Dennis Murage \\ Strathmore University -- BSc Informatics and Computer Science}
+\date{Project proposal dated June 2026}
+
+\begin{document}
+\maketitle
+
+\section*{Purpose of this document}
+This file is a compact, agent-oriented context brief derived from the project proposal supplied by the user. Use it as project background when planning, implementing, reviewing, or documenting the system. It describes the \emph{proposed} design and research goals; it does not prove that any component has already been implemented. When repository code, configuration, datasets, or newer instructions are supplied, inspect those sources and distinguish implemented facts from proposal intentions.
+
+\section{Project at a glance}
+\begin{itemize}
+  \item \textbf{Project title:} Mitigating Forecast Degradation in German--French Electricity Spreads Using Performance-Triggered Retraining.
+  \item \textbf{Research problem:} Forecasting models can become less accurate as market conditions and relationships between weather, grid load, generation, and prices change. Fixed-calendar retraining can waste compute during stable periods or respond too slowly after a shift.
+  \item \textbf{Core question:} Can performance-triggered retraining reduce unnecessary retraining events while maintaining forecast accuracy comparable to weekly scheduled retraining?
+  \item \textbf{Forecast target:} Hourly German--French day-ahead electricity price spread.
+  \item \textbf{Model held constant:} XGBoost regressor. The experiment studies retraining policy, not a contest between model architectures.
+  \item \textbf{Evaluation:} Historical, time-ordered backtesting over data from 2020--2025, subject to data availability and completeness.
+  \item \textbf{Intended outputs:} A DataOps/retraining pipeline prototype, a monitoring dashboard, and technical documentation with comparative backtesting results.
+\end{itemize}
+
+\section{Research objectives}
+The general objective is to develop and evaluate a DataOps pipeline that compares retraining strategies for German--French day-ahead electricity price spread forecasting.
+
+Specific objectives:
+\begin{enumerate}
+  \item Review day-ahead electricity price-spread forecasting and post-deployment model monitoring.
+  \item Examine existing retraining strategies in energy forecasting and related domains.
+  \item Design a DataOps pipeline for forecasting, monitoring, and retraining.
+  \item Develop an XGBoost forecasting system using ENTSO-E and Open-Meteo data.
+  \item Compare no retraining, fixed-schedule retraining, and performance-triggered retraining through historical backtesting.
+\end{enumerate}
+
+\section{Target definition}
+For each hourly delivery period, calculate the target as:
+\[
+  \text{spread}_{t} = \text{German day-ahead price}_{t}
+  - \text{French day-ahead price}_{t}.
+\]
+Keep this sign convention consistent in data preparation, predictions, metrics, plots, dashboard labels, and documentation. Do not silently reverse the subtraction order.
+
+\section{Data sources and candidate features}
+\subsection{Data sources}
+\begin{itemize}
+  \item \textbf{ENTSO-E Transparency Platform:} Day-ahead prices, load, and generation-related/grid variables for the German and French bidding zones.
+  \item \textbf{Open-Meteo:} Weather variables such as temperature, wind speed, and solar irradiance.
+\end{itemize}
+The proposal describes hourly data for 2020--2025, subject to availability and completeness. Record source timestamps, time zones, units, missing intervals, and retrieval dates. Do not fabricate missing observations or assume an API response is complete without validation.
+
+\subsection{Preprocessing and feature engineering}
+The proposal calls for:
+\begin{itemize}
+  \item Cleaning and aligning market, grid, and weather data into a consistent hourly timeline.
+  \item Standardising timestamps and explicitly handling daylight-saving-time transitions, duplicate records, missing values, and inconsistent timestamps.
+  \item Creating lagged spread values, lagged prices, rolling averages, calendar features, and relevant weather and grid predictors.
+  \item Applying equivalent preprocessing and feature definitions across all three strategies.
+\end{itemize}
+\textbf{Critical forecasting constraint:} avoid target leakage. At each simulated forecast time, features must use only information that would genuinely have been available then. In particular, distinguish observed historical weather from weather forecasts, and ensure lag/rolling calculations do not use future values. Document the assumed forecast issue time and data availability rules.
+
+\section{Retraining strategies}
+Implement and evaluate these three policies with the same target, features, base model configuration, and evaluation periods.
+
+\subsection{A. No retraining}
+Train the model once using the initial training window, then keep it fixed throughout the evaluation period. This is the static baseline.
+
+\subsection{B. Fixed-schedule retraining}
+Retrain at a predefined regular interval; the proposal gives weekly retraining as the principal example. Make the schedule explicit and consistent in the experiment configuration.
+
+\subsection{C. Performance-triggered retraining}
+Monitor realised forecast errors as actual prices become available. Use rolling forecast error, with a 7-day moving average of RMSE given as an example, and retrain when the chosen metric exceeds a predefined threshold. The exact threshold, rolling-window definition, minimum observations, cooldown/refractory period, and training-window policy are experimental choices that must be documented and justified rather than treated as already settled.
+
+The proposal identifies rolling RMSE as the primary trigger. Population Stability Index (PSI) may be logged as a secondary feature-drift diagnostic; it is not the primary retraining trigger in the proposed design.
+
+\section{Experimental design and evaluation}
+\begin{itemize}
+  \item Use time-ordered historical backtesting, not random train/test splitting for a time series.
+  \item Keep model architecture (XGBoost), data sources, feature set, target definition, and evaluation metrics consistent across strategies so the main independent variable is the retraining policy.
+  \item Use a clearly specified initial training period, validation/tuning procedure, and out-of-sample evaluation period. Avoid tuning thresholds on the final test period.
+  \item Primary comparison metrics: Root Mean Squared Error (RMSE), Mean Absolute Error (MAE), and retraining-event count/frequency.
+  \item Optional additional analysis: directional accuracy and logged PSI values as a secondary diagnostic.
+  \item Report both predictive performance and operational cost proxies, especially number of retraining events. Do not claim a strategy is better based on accuracy alone if the research question also concerns retraining efficiency.
+  \item Preserve experiment configuration, model/version identifiers, forecasts, actuals, error calculations, trigger decisions, and retraining events so results can be reproduced and audited.
+\end{itemize}
+
+\section{Proposed architecture}
+The proposal describes a serverless AWS DataOps pipeline:
+\begin{itemize}
+  \item \textbf{AWS Lambda:} Lightweight data ingestion and transformation.
+  \item \textbf{Amazon S3:} Storage for raw and processed data, Parquet datasets, model outputs, logs, and evaluation results.
+  \item \textbf{AWS Step Functions:} Workflow orchestration.
+  \item \textbf{Amazon EventBridge:} Scheduled and event-based execution / retraining triggers.
+  \item \textbf{Amazon CloudWatch:} Logging and monitoring.
+  \item \textbf{Terraform:} Infrastructure as code.
+  \item \textbf{GitHub Actions:} CI/CD.
+  \item \textbf{Python:} Data processing, training, backtesting, and pipeline logic.
+\end{itemize}
+The proposal aims to remain within the AWS Free Tier where feasible. This is a design goal, not a guarantee of zero cost. Before deploying resources, estimate costs, configure budgets/alerts where available, and avoid creating expensive or long-running resources without approval. The proposal mentions serverless execution, but model training and backtesting workloads may have runtime, memory, package-size, and service-limit constraints; validate feasibility instead of assuming every workload fits Lambda.
+
+\section{Monitoring dashboard}
+The planned dashboard is for an analyst/forecaster and may display:
+\begin{itemize}
+  \item Recent predicted and actual German--French spreads.
+  \item Rolling RMSE and other forecast-performance metrics.
+  \item Retraining alerts, event history, and model versions.
+  \item Comparative outcomes for all three retraining strategies.
+  \item Evaluation reports and, depending on implementation, configurable thresholds or manual retraining controls.
+\end{itemize}
+Dashboard controls should reflect real backend capabilities. Do not present a retraining action as successful until the backend confirms it. Clearly label simulated/backtested results versus any live data or production execution.
+
+\section{Planned system concepts and records}
+The proposal identifies these candidate entities/concepts:
+\begin{itemize}
+  \item \texttt{FeatureDataset}
+  \item \texttt{Forecast}
+  \item \texttt{ActualPrice}
+  \item \texttt{ModelVersion}
+  \item \texttt{RetrainingEvent}
+  \item \texttt{EvaluationResult}
+  \item \texttt{User} or \texttt{Analyst}
+\end{itemize}
+Candidate service/class names include \texttt{DataSource}, \texttt{DataIngestionService}, \texttt{PreprocessingService}, \texttt{ForecastModel}, \texttt{ModelTrainer}, \texttt{ForecastService}, \texttt{PerformanceMonitor}, \texttt{RetrainingPolicy}, \texttt{ModelRegistry}, \texttt{EvaluationService}, and \texttt{Dashboard}. These are proposed design concepts, not mandatory names. Follow the actual repository conventions if code already exists.
+
+\section{Technology summary}
+\begin{longtable}{@{}p{0.27\textwidth}p{0.66\textwidth}@{}}
+\toprule
+\textbf{Technology} & \textbf{Intended role} \\
+\midrule
+Python & Data processing, model training, backtesting, pipeline scripts \\
+Pandas / NumPy & Cleaning, transformations, timestamp alignment, feature engineering \\
+XGBoost & Fixed forecasting model for policy comparisons \\
+Scikit-learn & Evaluation metrics, preprocessing/validation utilities, tuning support \\
+ENTSO-E API/platform & Electricity market and grid data \\
+Open-Meteo & Weather data \\
+AWS Lambda & Ingestion/transformation tasks \\
+Amazon S3 / Parquet & Data lake and artifact storage \\
+AWS Step Functions & Pipeline orchestration \\
+Amazon EventBridge & Scheduled and event-based triggers \\
+Amazon CloudWatch & Logs and monitoring \\
+Terraform & Infrastructure provisioning \\
+Git / GitHub Actions & Version control and CI/CD \\
+Matplotlib & Visualisation of errors, rolling RMSE, retraining events, and comparisons \\
+\bottomrule
+\end{longtable}
+
+\section{Scope boundaries}
+In scope:
+\begin{itemize}
+  \item German--French bidding-zone pair.
+  \item Day-ahead market only.
+  \item XGBoost as the only forecasting architecture in the main experiment.
+  \item Historical backtesting of the three retraining strategies.
+  \item Serverless DataOps prototype and monitoring dashboard.
+\end{itemize}
+Out of scope according to the proposal:
+\begin{itemize}
+  \item Intraday and balancing-market forecasting.
+  \item Live trading simulation or profit-and-loss analysis.
+  \item Comparing multiple model architectures.
+  \item Formal uncertainty quantification such as conformal prediction.
+  \item Bidding zones beyond Germany and France.
+\end{itemize}
+
+\section{Development approach}
+The proposal adopts Agile Scrum for iterative development and Object-Oriented Analysis and Design (OOAD) for system analysis/design. Proposed analysis/design artefacts include use-case, sequence, entity-relationship, class, and activity diagrams, plus storage schema, dashboard wireframe, and system architecture. Expected deliverables are the retraining pipeline prototype, monitoring dashboard, and system documentation.
+
+\section{Known risks and implementation cautions}
+\begin{itemize}
+  \item \textbf{Data availability and quality:} ENTSO-E/Open-Meteo outages, gaps, schema changes, and inconsistent intervals may affect the study. Surface and document gaps.
+  \item \textbf{Time zones and daylight saving:} European electricity data has clock changes. Use a well-defined canonical timeline and test 23/25-hour days.
+  \item \textbf{Leakage:} A backtest must not use future observations or unavailable weather forecasts to create features.
+  \item \textbf{Fair comparison:} Keep strategy comparisons aligned on forecast timestamps and evaluation observations.
+  \item \textbf{Trigger sensitivity:} Performance-trigger threshold selection can materially change results; report the selected method and sensitivity analysis where practical.
+  \item \textbf{Retraining semantics:} Specify whether training uses an expanding or rolling history window and how model promotion/rollback works.
+  \item \textbf{Operational constraints:} Check AWS quotas, runtime limits, deployment package sizes, and actual cost before selecting service boundaries.
+  \item \textbf{Reproducibility:} Pin dependencies where practical, seed stochastic processes where applicable, version data/configuration, and save experiment metadata.
+\end{itemize}
+
+\section{Instructions to AI agents}
+When working on this project:
+\begin{enumerate}
+  \item \textbf{Read before changing.} Inspect the existing repository structure, README, dependency files, tests, configuration, and relevant implementation before proposing or editing code.
+  \item \textbf{Separate facts from plans.} This brief is based on a proposal. Clearly label features as implemented, partially implemented, planned, or unverified. Do not invent repository files, API endpoints, data fields, credentials, or deployment status.
+  \item \textbf{Preserve the research question.} The central comparison is between no retraining, weekly fixed-schedule retraining, and rolling-error performance-triggered retraining. Do not expand scope into model architecture competitions unless explicitly requested.
+  \item \textbf{Prevent temporal leakage.} Treat this as a time-series forecasting and historical simulation problem. Explain the information available at each forecast origin and ensure actual prices only enter monitoring after they become available.
+  \item \textbf{Make experiments reproducible.} Centralise configuration for date ranges, target sign convention, features, model parameters, rolling window, threshold, schedule, and training-window policy. Persist metrics and retraining events.
+  \item \textbf{Test edge cases.} Include tests for missing hours, duplicate timestamps, daylight-saving transitions, absent data, empty windows, threshold boundaries, and retraining cooldowns if implemented.
+  \item \textbf{Keep the baseline fair.} Use consistent evaluation periods and metrics across policies; explain any unavoidable differences.
+  \item \textbf{Avoid unsupported claims.} Do not state that performance-triggered retraining is superior until measured results support that conclusion. The proposal's anticipated findings are a hypothesis, not a result.
+  \item \textbf{Be cost-aware.} Prefer simple, observable, reproducible components. Check real AWS costs and service limits before deploying or recommending paid resources.
+  \item \textbf{Document decisions.} For significant design choices, state the rationale, alternatives, assumptions, trade-offs, and tests.
+  \item \textbf{Make focused changes.} Follow the repository's conventions, avoid unrelated refactors, and run relevant tests or explicitly report why they could not be run.
+\end{enumerate}
+
+\section{Research hypothesis / anticipated outcome}
+The proposal anticipates that performance-triggered retraining may achieve accuracy comparable to fixed-schedule retraining while requiring fewer retraining events. This is an expectation to test, not a conclusion to encode into the system or report as fact. Results may support, qualify, or contradict it.
+
+\section{Project identity}
+\begin{itemize}
+  \item \textbf{Student:} Mukoma Dennis Murage
+  \item \textbf{Admission number:} 139360
+  \item \textbf{Programme:} Bachelor of Science in Informatics and Computer Science
+  \item \textbf{Institution:} Strathmore University, School of Computing and Engineering Sciences
+  \item \textbf{Supervisor named in proposal:} Dr. Vincent Mbandu
+  \item \textbf{Proposal date:} June 2026
+\end{itemize}
+
+\section*{Final note for agents}
+Use this file as persistent high-level context, not as a substitute for inspecting the current codebase or verifying data-source behaviour. When an implementation decision is ambiguous, state the assumption and ask for clarification if it materially affects correctness, cost, or the research design.
+
+\end{document}

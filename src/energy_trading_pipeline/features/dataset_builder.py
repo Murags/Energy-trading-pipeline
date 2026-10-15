@@ -17,7 +17,6 @@ from energy_trading_pipeline.features.lag_features import build_lag_features
 from energy_trading_pipeline.features.rolling_features import build_rolling_features
 from energy_trading_pipeline.features.weather_features import build_weather_features
 
-
 logger = logging.getLogger(__name__)
 
 TARGET_COLUMN = "spread"
@@ -32,6 +31,8 @@ FEATURE_STAGE_ORDER: tuple[str, ...] = (
 )
 REQUIRED_FEATURE_CONFIG_KEYS: tuple[str, ...] = ("lag_hours", "rolling_window_hours")
 OPTIONAL_FEATURE_CONFIG_KEYS: tuple[str, ...] = (
+    "rolling_shift_hours",
+    "calendar_timezone",
     "calendar_features",
     "holiday_dates",
     "weather_columns",
@@ -88,12 +89,15 @@ def build_feature_dataset(
     stages: dict[str, dict[str, Any]] = {}
     result, stages["lag"] = build_lag_features(df, resolved["lag_hours"])
     result, stages["rolling"] = build_rolling_features(
-        result, resolved["rolling_window_hours"]
+        result,
+        resolved["rolling_window_hours"],
+        shift_hours=resolved["rolling_shift_hours"],
     )
     result, stages["calendar"] = build_calendar_features(
         result,
         features=resolved["calendar_features"],
         holiday_dates=resolved["holiday_dates"],
+        timezone=resolved["calendar_timezone"],
     )
     result, stages["weather"] = build_weather_features(
         result, columns=resolved["weather_columns"]
@@ -187,6 +191,16 @@ def _applied_feature_config(
 ) -> dict[str, Any]:
     """Return the normalized feature settings each stage actually applied."""
     return {
+        **(
+            {"rolling_shift_hours": stages["rolling"]["shift_hours"]}
+            if stages["rolling"]["shift_hours"] != 1
+            else {}
+        ),
+        **(
+            {"calendar_timezone": stages["calendar"]["timezone"]}
+            if stages["calendar"]["timezone"] != "UTC"
+            else {}
+        ),
         "lag_hours": stages["lag"]["lag_hours"],
         "lag_columns": stages["lag"]["source_columns"],
         "rolling_window_hours": stages["rolling"]["window_hours"],
@@ -231,9 +245,7 @@ def _resolve_feature_config(feature_config: Any) -> dict[str, Any]:
         raise ValueError(
             "feature_config must be the 'features' mapping of the experiment config"
         )
-    missing = [
-        key for key in REQUIRED_FEATURE_CONFIG_KEYS if key not in feature_config
-    ]
+    missing = [key for key in REQUIRED_FEATURE_CONFIG_KEYS if key not in feature_config]
     if missing:
         raise ValueError(f"Missing required feature config key(s): {missing}")
     known = set(REQUIRED_FEATURE_CONFIG_KEYS) | set(OPTIONAL_FEATURE_CONFIG_KEYS)
@@ -245,6 +257,8 @@ def _resolve_feature_config(feature_config: Any) -> dict[str, Any]:
             sorted(known),
         )
     return {
+        "rolling_shift_hours": feature_config.get("rolling_shift_hours", 1),
+        "calendar_timezone": feature_config.get("calendar_timezone", "UTC"),
         "lag_hours": feature_config["lag_hours"],
         "rolling_window_hours": feature_config["rolling_window_hours"],
         "calendar_features": feature_config.get(

@@ -11,6 +11,7 @@ from energy_trading_pipeline.config.loader import load_config
 from energy_trading_pipeline.config.paths import get_default_base_dir, resolve_path
 from energy_trading_pipeline.evaluation.exports import export_dashboard_artifacts
 from energy_trading_pipeline.models.trainer import train_baseline
+from energy_trading_pipeline.features.availability import prepare_configured_day_ahead
 from energy_trading_pipeline.utils.io import create_run_directory, write_run_metadata
 from energy_trading_pipeline.utils.time import generate_run_id
 
@@ -24,7 +25,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["train", "backtest", "export-dashboard"],
+        choices=["train", "backtest", "export-dashboard", "prepare-day-ahead"],
         help="Train, backtest, or export saved results; omit to inspect config.",
     )
     parser.add_argument(
@@ -51,7 +52,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--model-index", type=Path, help="Saved model registry YAML index."
     )
     model_sources.add_argument(
-        "--run-metadata", type=Path, action="append",
+        "--run-metadata",
+        type=Path,
+        action="append",
         help="Saved backtest run metadata YAML; repeat for all referenced versions.",
     )
     args = parser.parse_args(argv)
@@ -64,8 +67,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     elif any(
         getattr(args, name) is not None
         for name in (
-            "forecasts", "metrics", "retraining_events", "rolling_rmse",
-            "model_index", "run_metadata",
+            "forecasts",
+            "metrics",
+            "retraining_events",
+            "rolling_rmse",
+            "model_index",
+            "run_metadata",
         )
     ):
         parser.error("Saved artifact flags require the export-dashboard command")
@@ -99,12 +106,21 @@ def main(argv: list[str] | None = None) -> int:
             for name, path in paths.items():
                 print(f"  {name}: {path}")
             return 0
+        if args.command == "prepare-day-ahead":
+            metadata = prepare_configured_day_ahead(
+                config, config_file_path=args.config
+            )
+            print(f"Feature artifact: {metadata['artifact_paths']['feature_dataset']}")
+            print(f"Metadata: {metadata['artifact_paths']['metadata']}")
+            return 0
         if args.command == "train":
             metadata = train_baseline(config, config_file_path=args.config)
             print(f"Run ID: {metadata['run_id']}")
             print(f"Model version: {metadata['model_version']}")
             print(f"Model artifact: {metadata['artifact_paths']['model']}")
-            print(f"Run metadata written to: {metadata['artifact_paths']['run_metadata']}")
+            print(
+                f"Run metadata written to: {metadata['artifact_paths']['run_metadata']}"
+            )
             return 0
         if args.command == "backtest":
             metadata = run_configured_backtest(config, config_file_path=args.config)
@@ -112,7 +128,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Model version: {metadata['model_version']}")
             print(f"Forecast log: {metadata['artifact_paths']['forecasts']}")
             print(f"Backtest log: {metadata['artifact_paths']['backtest_log']}")
-            print(f"Run metadata written to: {metadata['artifact_paths']['run_metadata']}")
+            print(
+                f"Run metadata written to: {metadata['artifact_paths']['run_metadata']}"
+            )
             return 0
     except (OSError, ValueError, KeyError, yaml.YAMLError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

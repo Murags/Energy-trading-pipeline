@@ -9,7 +9,6 @@ import pandas as pd
 
 from energy_trading_pipeline.preprocessing.validation import summarize_records
 
-
 logger = logging.getLogger(__name__)
 
 # Canonical emission order. Columns are always appended in this order, so the
@@ -42,6 +41,7 @@ def build_calendar_features(
     *,
     features: Sequence[str] = DEFAULT_CALENDAR_FEATURES,
     holiday_dates: Sequence[str | date] = (),
+    timezone: str = "UTC",
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Append the configured calendar columns and describe them in metadata.
 
@@ -89,7 +89,9 @@ def build_calendar_features(
     for name in requested:
         if name in skipped:
             continue
-        result[name] = _calendar_column(result["timestamp"], name, holidays)
+        result[name] = _calendar_column(
+            result["timestamp"].dt.tz_convert(timezone), name, holidays
+        )
         generated.append(name)
     # Move any recomputed pre-existing calendar columns to the appended position.
     base_columns = [column for column in result.columns if column not in generated]
@@ -103,8 +105,10 @@ def build_calendar_features(
         "unconfigured_holiday_policy": UNCONFIGURED_HOLIDAY_POLICY,
         "weekend_days_of_week": list(WEEKEND_DAYS_OF_WEEK),
         "holiday_dates": [value.isoformat() for value in sorted(holidays)],
-        "holiday_date_basis": HOLIDAY_DATE_BASIS,
-        "timezone": "UTC",
+        "holiday_date_basis": (
+            HOLIDAY_DATE_BASIS if timezone == "UTC" else "local_calendar_date"
+        ),
+        "timezone": timezone,
         "output_rows": len(result),
     }
     return result, metadata

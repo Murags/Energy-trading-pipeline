@@ -1,0 +1,6 @@
+# Cached paired hourly prices; never modified by preparation.
+processed_data_parquet_path: data/processed/run_20261006_072807/prices_de_fr.parquet
+feature_data_parquet_path: data/features/day_ahead/feature_dataset.parquet
+models_dir: models/day_ahead
+logs_dir: logs/day_ahead
+reports_dir: reports/day_ahead

@@ -1,0 +1,165 @@
+stage: features.dataset
+target_column: spread
+feature_columns:
+- spread_lag_48
+- spread_lag_168
+- price_de_lag_48
+- price_de_lag_168
+- price_fr_lag_48
+- price_fr_lag_168
+- spread_rolling_mean_24
+- spread_rolling_std_24
+- price_de_rolling_mean_24
+- price_de_rolling_std_24
+- price_fr_rolling_mean_24
+- price_fr_rolling_std_24
+- hour
+- day_of_week
+- month
+- is_weekend
+source_processed_dataset: /Users/murage/Desktop/school/ICS_II/Energy-trading-pipeline/data/processed/run_20261006_072807/prices_de_fr.parquet
+source_date_range:
+  start: '2021-12-31T23:00:00+00:00'
+  end: '2025-12-31T22:00:00+00:00'
+source_rows: 35064
+date_range:
+  start: '2022-01-07T23:00:00+00:00'
+  end: '2025-12-31T22:00:00+00:00'
+timezone: UTC
+feature_config:
+  rolling_shift_hours: 48
+  calendar_timezone: Europe/Berlin
+  lag_hours: &id002
+  - 48
+  - 168
+  lag_columns: &id001
+  - spread
+  - price_de
+  - price_fr
+  rolling_window_hours: &id004
+  - 24
+  rolling_columns: &id003
+  - spread
+  - price_de
+  - price_fr
+  calendar_features: &id005
+  - hour
+  - day_of_week
+  - month
+  - is_weekend
+  holiday_dates: &id006 []
+  weather_columns: &id007 []
+  grid_columns: &id008 []
+excluded_columns:
+- timestamp
+- price_de
+- price_fr
+- forecast_timestamp
+- feature_available_at
+- actual_available_at
+incomplete_row_policy: drop_rows_without_a_complete_feature_vector
+incomplete_rows_dropped: 168
+output_rows: 34896
+feature_stages:
+  lag:
+    stage: features.lag
+    source_columns: *id001
+    lag_hours: *id002
+    generated_columns:
+    - spread_lag_48
+    - spread_lag_168
+    - price_de_lag_48
+    - price_de_lag_168
+    - price_fr_lag_48
+    - price_fr_lag_168
+    insufficient_history_policy: retain_rows_with_null_lags
+    min_history_hours: 168
+    incomplete_history_rows: 168
+    output_rows: 35064
+  rolling:
+    stage: features.rolling
+    source_columns: *id003
+    window_hours: *id004
+    statistics:
+    - mean
+    - std
+    generated_columns:
+    - spread_rolling_mean_24
+    - spread_rolling_std_24
+    - price_de_rolling_mean_24
+    - price_de_rolling_std_24
+    - price_fr_rolling_mean_24
+    - price_fr_rolling_std_24
+    shift_hours: 48
+    std_ddof: 1
+    insufficient_window_policy: retain_rows_with_null_rolling_features
+    min_history_hours: 71
+    incomplete_window_rows: 71
+    output_rows: 35064
+  calendar:
+    stage: features.calendar
+    requested_features: *id005
+    generated_columns:
+    - hour
+    - day_of_week
+    - month
+    - is_weekend
+    skipped_features: []
+    unconfigured_holiday_policy: warn_and_skip_is_holiday
+    weekend_days_of_week:
+    - 5
+    - 6
+    holiday_dates: *id006
+    holiday_date_basis: local_calendar_date
+    timezone: Europe/Berlin
+    output_rows: 35064
+  weather:
+    stage: features.weather
+    group: weather
+    requested_columns: *id007
+    selected_columns: []
+    missing_columns: []
+    unusable_columns: {}
+    unavailable_column_policy: warn_and_continue_with_reduced_feature_set
+    dtype: float64
+    output_rows: 35064
+  grid:
+    stage: features.grid
+    group: grid
+    requested_columns: *id008
+    selected_columns: []
+    missing_columns: []
+    unusable_columns: {}
+    unavailable_column_policy: warn_and_continue_with_reduced_feature_set
+    dtype: float64
+    output_rows: 35064
+availability_contract:
+  mode: day_ahead
+  issue_hour: 10
+  issue_timezone: Europe/Berlin
+  price_usable_after: delivery_end_timestamp_plus_1_hour
+  features:
+    lag_hours:
+    - 48
+    - 168
+    rolling_window_hours:
+    - 24
+    rolling_shift_hours: 48
+    calendar_timezone: Europe/Berlin
+    calendar_features:
+    - hour
+    - day_of_week
+    - month
+    - is_weekend
+    weather_columns: []
+    grid_columns: []
+  limitations: Historical snapshot prices may include later revisions; publication
+    vintages are not reconstructed. Usable-after is deliberately delayed until delivery
+    end, not an observed publication time. ERA5 and grid predictors are excluded.
+warmup_rows_dropped: 168
+config_file_path: /Users/murage/Desktop/school/ICS_II/Energy-trading-pipeline/configs/experiment_day_ahead.yaml
+source_sha256: 3f0592d6fe6d247c84e8ef7aee95e20b28e2ec47fe3b3126e5bbaaf8c1abff50
+artifact_paths:
+  feature_dataset: /Users/murage/Desktop/school/ICS_II/Energy-trading-pipeline/data/features/day_ahead/feature_dataset.parquet
+  metadata: /Users/murage/Desktop/school/ICS_II/Energy-trading-pipeline/data/features/day_ahead/feature_dataset.metadata.yaml
+feature_sha256: a23734bee5e2cf898c9c091f28fc0ac6365bb4206eeda20f2da2912800d73eed

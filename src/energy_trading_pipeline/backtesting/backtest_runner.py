@@ -3,6 +3,10 @@
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 import json
+import hashlib
+import os
+import tempfile
+import yaml
 from pathlib import Path
 from typing import Any
 
@@ -24,9 +28,12 @@ from energy_trading_pipeline.config.paths import (
     resolve_paths_config,
 )
 from energy_trading_pipeline.models.xgboost_model import XGBoostSpreadModel
+from energy_trading_pipeline.features.availability import (
+    availability_contract,
+    validate_availability_frame,
+)
 from energy_trading_pipeline.utils.io import write_run_metadata
 from energy_trading_pipeline.utils.time import generate_run_id
-
 
 PolicyHook = Callable[[pd.Timestamp, pd.DataFrame], bool]
 
@@ -77,8 +84,24 @@ def run_configured_backtest(
     windows = generate_backtest_windows_from_config(config)
     columns = config["backtest"].get("feature_columns")
     if not isinstance(columns, list) or not columns:
-        raise ValueError("Backtesting requires a nonempty backtest.feature_columns list")
+        raise ValueError(
+            "Backtesting requires a nonempty backtest.feature_columns list"
+        )
     frame = pd.read_parquet(feature_path)
+    day_ahead = config["backtest"].get("mode") == "day_ahead"
+    feature_metadata = None
+    if day_ahead:
+        sidecar = feature_path.with_suffix(".metadata.yaml")
+        feature_metadata = yaml.safe_load(sidecar.read_text(encoding="utf-8"))
+        if not isinstance(feature_metadata, Mapping) or (
+            feature_metadata.get("availability_contract")
+            != availability_contract(config)
+            or feature_metadata.get("feature_columns") != columns
+            or feature_metadata.get("feature_sha256")
+            != hashlib.sha256(feature_path.read_bytes()).hexdigest()
+        ):
+            raise ValueError("Day-ahead feature artifact/config/metadata mismatch")
+        validate_availability_frame(frame, config, columns)
 
     run_id = generate_run_id()
     model_version = run_id.replace("run_", "model_", 1)
@@ -136,6 +159,13 @@ def run_configured_backtest(
             "metrics": {},
             "artifact_paths": artifact_paths,
         }
+        if day_ahead:
+            metadata["availability_contract"] = availability_contract(config)
+            metadata["feature_metadata"] = feature_metadata
+            metadata["issuance_times"] = [
+                window.issuance.isoformat() for window in windows
+            ]
+            metadata["evaluation_purpose"] = "engineering_smoke_not_final_evaluation"
         write_run_metadata(run_dir, metadata)
         _write_backtest_event(
             log_path, context, "backtest_completed", forecast_rows=len(forecasts)
@@ -183,7 +213,9 @@ def _select_hours(frame: pd.DataFrame, window: TimeWindow) -> pd.DataFrame:
     ]
     expected = pd.date_range(window.start, window.end, freq="h", inclusive="left")
     if rows["timestamp"].tolist() != expected.tolist():
-        raise ValueError(f"Incomplete hourly coverage for {window.start} to {window.end}")
+        raise ValueError(
+            f"Incomplete hourly coverage for {window.start} to {window.end}"
+        )
     return rows
 
 
@@ -238,7 +270,9 @@ def run_backtest(
     if forecast_path.suffix.lower() not in {".parquet", ".csv"}:
         raise ValueError("forecast_path must use .parquet or .csv")
     if (initial_model_path is None) == (model_output_path is None):
-        raise ValueError("Supply exactly one of model_output_path or initial_model_path")
+        raise ValueError(
+            "Supply exactly one of model_output_path or initial_model_path"
+        )
     if model_output_path is not None and Path(model_output_path).suffix != ".json":
         raise ValueError("model_output_path must use .json")
 
@@ -255,6 +289,7 @@ def run_backtest(
         "price_fr",
         "feature_available_at",
         "actual_available_at",
+        "forecast_timestamp",
     }
     if (
         not columns
@@ -262,8 +297,16 @@ def run_backtest(
         or len(set(columns)) != len(columns)
         or reserved.intersection(columns)
     ):
-        raise ValueError("feature_columns must be unique predictors without target leakage")
-    required = ["timestamp", target, "feature_available_at", "actual_available_at", *columns]
+        raise ValueError(
+            "feature_columns must be unique predictors without target leakage"
+        )
+    required = [
+        "timestamp",
+        target,
+        "feature_available_at",
+        "actual_available_at",
+        *columns,
+    ]
     if not feature_data.columns.is_unique:
         raise ValueError("Feature data has duplicate column names")
     missing = sorted(set(required) - set(feature_data.columns))
@@ -280,11 +323,19 @@ def run_backtest(
     if (frame["timestamp"] != frame["timestamp"].dt.floor("h")).any():
         raise ValueError("Feature data timestamps must be hourly aligned")
 
-    first_issuance = windows[0].forecast.start
+    day_ahead = config["backtest"].get("mode") == "day_ahead"
+    if day_ahead:
+        validate_availability_frame(
+            feature_data.reset_index(drop=True), config, columns
+        )
+        for path in (forecast_path, model_output_path):
+            if path is not None and Path(path).exists():
+                raise FileExistsError(f"Refusing to overwrite artifact: {path}")
+    first_issuance = windows[0].issuance
     # Preflight the entire evaluation before training or writing any artifacts.
     blocks = [_select_hours(frame, window.forecast) for window in windows]
     for window, block in zip(windows, blocks, strict=True):
-        if (block["feature_available_at"] > window.forecast.start).any():
+        if (block["feature_available_at"] > window.issuance).any():
             raise ValueError("Forecast features are unavailable at issuance")
     if initial_model_path is None:
         train = _select_hours(frame, windows[0].train)
@@ -292,9 +343,10 @@ def run_backtest(
             raise ValueError("Training features are unavailable at issuance")
         if (train["actual_available_at"] > first_issuance).any():
             raise ValueError("training actuals are unavailable at issuance")
-        if not pd.api.types.is_numeric_dtype(train[target]) or not np.isfinite(
-            train[target].to_numpy(dtype=float)
-        ).all():
+        if (
+            not pd.api.types.is_numeric_dtype(train[target])
+            or not np.isfinite(train[target].to_numpy(dtype=float)).all()
+        ):
             raise ValueError("Training actuals must be finite numeric values")
         model.fit(train[columns], train[target])
     else:
@@ -307,13 +359,15 @@ def run_backtest(
             or loaded.target_column != target
             or loaded.params != model.params
         ):
-            raise ValueError("Loaded model does not match configured features/target/params")
+            raise ValueError(
+                "Loaded model does not match configured features/target/params"
+            )
         model = loaded
 
     log = build_forecast_log(pd.DataFrame(columns=INPUT_COLUMNS))
     availability = frame.set_index("timestamp")["actual_available_at"]
     for window, block in zip(windows, blocks, strict=True):
-        issuance = window.forecast.start
+        issuance = window.issuance
         if policy_hook is not None:
             known = log["timestamp"].map(availability) <= issuance
             history = log.loc[known & log["actual"].notna()].copy(deep=True)
@@ -335,7 +389,22 @@ def run_backtest(
         current = build_forecast_log(records)
         log = current if log.empty else pd.concat([log, current], ignore_index=True)
 
-    if model_output_path is not None:
-        model.save(Path(model_output_path))
-    write_forecast_log(log, forecast_path)
+    if day_ahead:
+        if model_output_path is not None:
+            model_path = Path(model_output_path)
+            model_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=model_path.parent) as temporary:
+                staged = Path(temporary) / "model.json"
+                model.save(staged)
+                os.link(staged, model_path)  # Atomic, fails if destination exists.
+        forecast_path.parent.mkdir(parents=True, exist_ok=True)
+        with forecast_path.open("xb") as handle:
+            if forecast_path.suffix.lower() == ".parquet":
+                log.to_parquet(handle, index=False)
+            else:
+                handle.write(log.to_csv(index=False).encode("utf-8"))
+    else:
+        if model_output_path is not None:
+            model.save(Path(model_output_path))
+        write_forecast_log(log, forecast_path)
     return log

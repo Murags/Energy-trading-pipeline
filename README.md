@@ -810,3 +810,16 @@ Pytest still imports test modules before marker deselection. Keep live calls and
 credential checks inside tests or fixtures, and import optional client libraries
 there too, so default collection stays independent of credentials and optional
 dependencies.
+
+### Availability-aware day-ahead smoke experiment
+
+The approved price/calendar protocol issues the entire next local delivery day at
+10:00 `Europe/Berlin`, including 23/25-hour DST days. Prepare its separate feature
+artifact and run the static XGBoost smoke using
+[`docs/forecast_availability.md`](docs/forecast_availability.md).
+The commands use `configs/experiment_day_ahead.yaml` and
+`configs/local_paths_day_ahead.yaml`; preparation refuses existing output paths.
+This resolves the availability requirement for this dedicated experiment. Historical
+snapshot revisions remain a documented limitation. The January 2025 smoke is
+engineering verification; calibration, actual refitting, and the three-strategy
+research comparison remain subsequent work.
