@@ -2,12 +2,11 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import re
 from typing import Any
 
 import pandas as pd
-
 
 REQUIRED_BACKTEST_KEYS = (
     "evaluation_start_date",
@@ -54,11 +53,41 @@ class BacktestWindow:
     train: TimeWindow
     validation: TimeWindow
     forecast: TimeWindow
+    forecast_timestamp: pd.Timestamp | None = None
+
+    @property
+    def issuance(self) -> pd.Timestamp:
+        """Explicit issue instant, or legacy forecast start."""
+        return (
+            self.forecast_timestamp
+            if self.forecast_timestamp is not None
+            else self.forecast.start
+        )
 
     def __post_init__(self) -> None:
         for name in ("train", "validation", "forecast"):
             if not isinstance(getattr(self, name), TimeWindow):
                 raise ValueError(f"BacktestWindow.{name} must be a TimeWindow")
+        if self.forecast_timestamp is not None:
+            issue = self.forecast_timestamp
+            if (
+                not isinstance(issue, pd.Timestamp)
+                or pd.isna(issue)
+                or issue.tzinfo is None
+            ):
+                raise ValueError(
+                    "forecast_timestamp must be a timezone-aware timestamp"
+                )
+            issue = issue.tz_convert("UTC")
+            if (
+                issue != issue.floor("h")
+                or issue > self.forecast.start
+                or self.validation.end > issue
+            ):
+                raise ValueError(
+                    "issuance must be whole-hour and follow validation before delivery"
+                )
+            object.__setattr__(self, "forecast_timestamp", issue)
         if self.train.end > self.validation.start:
             raise ValueError("train.end must not follow validation.start")
         if self.validation.end > self.forecast.start:
@@ -195,6 +224,10 @@ def generate_backtest_windows_from_config(
         raise ValueError(
             "backtest.evaluation_end_date must not precede evaluation_start_date"
         )
+    if backtest.get("mode") == "day_ahead":
+        return generate_day_ahead_windows(backtest)
+    if backtest.get("mode", "legacy") != "legacy":
+        raise ValueError("Unsupported backtest.mode")
     return generate_backtest_windows(
         start.date(),
         end.date(),
@@ -202,3 +235,58 @@ def generate_backtest_windows_from_config(
         backtest["forecast_horizon_hours"],
         validation_window_days=backtest["validation_window_days"],
     )
+
+
+def day_ahead_issuance(
+    delivery_date: date, settings: Mapping[str, Any]
+) -> pd.Timestamp:
+    """Localize the preceding calendar day's whole-hour issuance, rejecting DST ambiguity."""
+    zone = settings.get("issue_timezone")
+    hour = settings.get("issue_hour")
+    if zone != "Europe/Berlin":
+        raise ValueError("day_ahead issue_timezone must be Europe/Berlin")
+    if isinstance(hour, bool) or not isinstance(hour, int) or not 0 <= hour <= 23:
+        raise ValueError("issue_hour must be an integer from 0 to 23")
+    local = pd.Timestamp(delivery_date - timedelta(days=1)) + pd.Timedelta(hours=hour)
+    try:
+        return local.tz_localize(
+            zone, ambiguous="raise", nonexistent="raise"
+        ).tz_convert("UTC")
+    except Exception as exc:
+        raise ValueError(f"Invalid or ambiguous local issuance: {local}") from exc
+
+
+def generate_day_ahead_windows(settings: Mapping[str, Any]) -> list[BacktestWindow]:
+    """Generate full local delivery days with elapsed history ending at issuance."""
+    start = _parse_date(
+        settings["evaluation_start_date"], "evaluation_start_date"
+    ).date()
+    end = _parse_date(settings["evaluation_end_date"], "evaluation_end_date").date()
+    if end < start:
+        raise ValueError("evaluation_end_date must not precede start")
+    if settings.get("forecast_horizon_hours") != 24:
+        raise ValueError(
+            "day_ahead forecast_horizon_hours must be 24 (nominal local day)"
+        )
+    training = _parse_duration(settings["train_window_days"], "train_window_days", "D")
+    validation = _parse_duration(
+        settings["validation_window_days"], "validation_window_days", "D"
+    )
+    windows = []
+    day = start
+    while day <= end:
+        issuance = day_ahead_issuance(day, settings)
+        begin = pd.Timestamp(day).tz_localize(settings["issue_timezone"])
+        finish = pd.Timestamp(day + timedelta(days=1)).tz_localize(
+            settings["issue_timezone"]
+        )
+        windows.append(
+            BacktestWindow(
+                TimeWindow(issuance - validation - training, issuance - validation),
+                TimeWindow(issuance - validation, issuance),
+                TimeWindow(begin, finish),
+                issuance,
+            )
+        )
+        day += timedelta(days=1)
+    return windows

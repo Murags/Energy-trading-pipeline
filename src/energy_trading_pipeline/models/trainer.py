@@ -19,7 +19,6 @@ from energy_trading_pipeline.models.xgboost_model import XGBoostSpreadModel
 from energy_trading_pipeline.utils.io import write_run_metadata
 from energy_trading_pipeline.utils.time import generate_run_id
 
-
 logger = logging.getLogger(__name__)
 
 TARGET_COLUMN = "spread"
@@ -89,7 +88,9 @@ class TrainingWindow:
                 "dates_config must be the 'dates' mapping of the experiment config"
             )
 
-        missing = [key for key in REQUIRED_WINDOW_CONFIG_KEYS if key not in dates_config]
+        missing = [
+            key for key in REQUIRED_WINDOW_CONFIG_KEYS if key not in dates_config
+        ]
         if missing:
             raise ValueError(
                 f"Missing required training window key(s) in the 'dates' config "
@@ -315,7 +316,9 @@ def select_training_window(
 
     target_column = _validate_target_column(target_column)
     missing_columns = [
-        column for column in (TIMESTAMP_COLUMN, target_column) if column not in df.columns
+        column
+        for column in (TIMESTAMP_COLUMN, target_column)
+        if column not in df.columns
     ]
     if missing_columns:
         raise ValueError(
@@ -427,11 +430,21 @@ def _resolve_feature_columns(
     df: pd.DataFrame, feature_columns: Sequence[str] | None, target_column: str
 ) -> list[str]:
     """Return the predictor columns, defaulting to everything but the reserved ones."""
-    reserved = (TIMESTAMP_COLUMN, target_column)
+    reserved = (
+        TIMESTAMP_COLUMN,
+        target_column,
+        "price_de",
+        "price_fr",
+        "actual_available_at",
+        "feature_available_at",
+        "forecast_timestamp",
+    )
     if feature_columns is None:
         resolved = [column for column in df.columns if column not in reserved]
     else:
-        if isinstance(feature_columns, str) or not isinstance(feature_columns, Sequence):
+        if isinstance(feature_columns, str) or not isinstance(
+            feature_columns, Sequence
+        ):
             raise ValueError("feature_columns must be a sequence of column names")
         resolved = list(feature_columns)
         held_back = [column for column in resolved if column in reserved]
@@ -516,9 +529,7 @@ def _parse_date(value: Any, field_name: str) -> date:
             raise ValueError(
                 f"Invalid {field_name}: {value!r} is not a valid YYYY-MM-DD date"
             ) from exc
-    raise ValueError(
-        f"Invalid {field_name}: {value!r} is not a valid YYYY-MM-DD date"
-    )
+    raise ValueError(f"Invalid {field_name}: {value!r} is not a valid YYYY-MM-DD date")
 
 
 def _validate_target_column(target_column: Any) -> str:

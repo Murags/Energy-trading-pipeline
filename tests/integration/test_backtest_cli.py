@@ -187,7 +187,7 @@ def test_backtest_cli_accepts_companion_configs(tmp_path, backtest_files):
         ("paths", "paths"),
         ("params", "model.params"),
         ("feature_columns", "feature_columns"),
-        ("strategy", "no_retraining"),
+        ("strategy", "must be one of"),
         ("window", "evaluation_end_date"),
     ],
 )
@@ -204,7 +204,7 @@ def test_invalid_backtest_config_fails_clearly(
     elif fault == "feature_columns":
         del config["backtest"]["feature_columns"]
     elif fault == "strategy":
-        config["retraining"]["strategy"] = "fixed_schedule"
+        config["retraining"]["strategy"] = "weekly"
     else:
         config["backtest"]["evaluation_end_date"] = "2024-01-02"
     config_path.write_text(yaml.safe_dump(config))
@@ -258,3 +258,64 @@ def test_backtest_cli_never_overwrites_existing_artifacts(
     assert main(["backtest", "--config", str(backtest_files[0])]) == 1
     assert "Error:" in capsys.readouterr().err
     assert existing.read_text() == "existing artifact"
+
+
+@pytest.mark.parametrize(
+    ("strategy", "settings", "trigger_reason"),
+    [
+        (
+            "fixed_schedule",
+            {"fixed_schedule_interval_days": 1},
+            "fixed_schedule_interval_elapsed",
+        ),
+        (
+            "performance_triggered",
+            {"rolling_rmse_threshold": 0.0, "rolling_rmse_window_days": 1},
+            "rolling_rmse_exceeds_threshold",
+        ),
+    ],
+)
+def test_cli_executes_and_records_retraining(
+    backtest_files, tmp_path, strategy, settings, trigger_reason
+):
+    config_path, config, _ = backtest_files
+    config["retraining"] = {"strategy": strategy, **settings}
+    if strategy == "performance_triggered":
+        config["retraining"]["rolling_rmse_min_periods"] = 1
+    config_path.write_text(yaml.safe_dump(config))
+
+    assert main(["backtest", "--config", str(config_path)]) == 0
+
+    run_path = next((tmp_path / "logs/runs").glob("run_*/run_metadata.yaml"))
+    run = yaml.safe_load(run_path.read_text())
+    events = pd.read_parquet(run["artifact_paths"]["retraining_events"])
+
+    assert run["strategy"] == strategy
+    assert len(events) == run["retraining_event_count"] >= 1
+    assert set(events["strategy"]) == {strategy}
+    assert set(events["trigger_reason"]) == {trigger_reason}
+    # Every refit is a real saved model, and forecasts name the model that made them.
+    forecasts = pd.read_parquet(run["artifact_paths"]["forecasts"])
+    model_dir = Path(run["artifact_paths"]["model"]).parent
+    for version in events["model_version"]:
+        assert (model_dir / f"{version}.json").is_file()
+        assert version in run["model_versions"]
+    assert set(forecasts["model_version"]) <= set(run["model_versions"])
+    # Training windows must close before the issuance that requested the refit.
+    assert (
+        pd.to_datetime(events["training_window_end"], utc=True)
+        <= pd.to_datetime(events["timestamp"], utc=True)
+    ).all()
+
+
+def test_no_retraining_cli_writes_an_empty_event_log(backtest_files, tmp_path):
+    config_path, _, _ = backtest_files
+    assert main(["backtest", "--config", str(config_path)]) == 0
+
+    run_path = next((tmp_path / "logs/runs").glob("run_*/run_metadata.yaml"))
+    run = yaml.safe_load(run_path.read_text())
+    events = pd.read_parquet(run["artifact_paths"]["retraining_events"])
+
+    assert events.empty
+    assert run["retraining_event_count"] == 0
+    assert run["model_versions"] == [run["model_version"]]

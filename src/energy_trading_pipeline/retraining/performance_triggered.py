@@ -28,6 +28,7 @@ class PerformanceTriggeredPolicy(RetrainingPolicy):
 		*,
 		window_days: int = 7,
 		min_periods: int | None = None,
+		actual_availability_lag_hours: int = 0,
 	) -> None:
 		super().__init__()
 		if (
@@ -49,16 +50,32 @@ class PerformanceTriggeredPolicy(RetrainingPolicy):
 			or min_periods <= 0
 		):
 			raise ValueError("min_periods must be a positive integer")
+		if (
+			not isinstance(actual_availability_lag_hours, int)
+			or isinstance(actual_availability_lag_hours, bool)
+			or actual_availability_lag_hours < 0
+		):
+			raise ValueError(
+				"actual_availability_lag_hours must be a non-negative integer"
+			)
 		self.threshold = float(threshold)
 		self.window_days = window_days
 		self.min_periods = min_periods
+		self.actual_availability_lag_hours = actual_availability_lag_hours
 		self.rolling_rmse = float("nan")
 
 	@classmethod
 	def from_config(
 		cls, config: Mapping[str, Any], *, min_periods: int | None = None
 	) -> "PerformanceTriggeredPolicy":
-		"""Read the threshold and monitoring window from experiment config."""
+		"""Read the threshold and monitoring window from experiment config.
+
+		Optional `retraining.actual_availability_lag_hours` records how long after
+		its target hour an actual becomes usable, so the window anchors on the
+		newest observable target rather than the decision instant. Optional
+		`retraining.rolling_rmse_min_periods` overrides the warm-up requirement;
+		an explicit `min_periods` argument still wins, so callers keep control.
+		"""
 		retraining = config.get("retraining")
 		for key in ("rolling_rmse_threshold", "rolling_rmse_window_days"):
 			if not isinstance(retraining, Mapping) or key not in retraining:
@@ -66,7 +83,14 @@ class PerformanceTriggeredPolicy(RetrainingPolicy):
 		return cls(
 			threshold=retraining["rolling_rmse_threshold"],
 			window_days=retraining["rolling_rmse_window_days"],
-			min_periods=min_periods,
+			min_periods=(
+				min_periods
+				if min_periods is not None
+				else retraining.get("rolling_rmse_min_periods")
+			),
+			actual_availability_lag_hours=retraining.get(
+				"actual_availability_lag_hours", 0
+			),
 		)
 
 	def as_policy_hook(
@@ -137,6 +161,8 @@ class PerformanceTriggeredPolicy(RetrainingPolicy):
 			decision_timestamp,
 			window_days=self.window_days,
 			min_periods=self.min_periods,
+			available_through=decision_timestamp
+			- pd.Timedelta(hours=self.actual_availability_lag_hours),
 		)
 		self.rolling_rmse = metric["rolling_rmse"]
 		return self.rolling_rmse > self.threshold

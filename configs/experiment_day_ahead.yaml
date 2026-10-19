@@ -1,0 +1,56 @@
+# January engineering smoke only; calibration and final evaluation are separate stories.
+data:
+  target_column: spread
+  timestamp_column: timestamp
+  input_format: parquet
+dates:
+  start_date: "2022-01-01"
+  end_date: "2025-12-31"
+features:
+  lag_hours: [48, 168]
+  rolling_window_hours: [24]
+  rolling_shift_hours: 48
+  calendar_timezone: Europe/Berlin
+  calendar_features: [hour, day_of_week, month, is_weekend]
+  weather_columns: []
+  grid_columns: []
+model:
+  type: xgboost
+  target_column: spread
+backtest:
+  mode: day_ahead
+  issue_hour: 10
+  issue_timezone: Europe/Berlin
+  evaluation_start_date: "2025-01-01"
+  evaluation_end_date: "2025-01-07"
+  train_window_days: 90
+  validation_window_days: 7
+  forecast_horizon_hours: 24
+  feature_columns:
+    - spread_lag_48
+    - spread_lag_168
+    - price_de_lag_48
+    - price_de_lag_168
+    - price_fr_lag_48
+    - price_fr_lag_168
+    - spread_rolling_mean_24
+    - spread_rolling_std_24
+    - price_de_rolling_mean_24
+    - price_de_rolling_std_24
+    - price_fr_rolling_mean_24
+    - price_fr_rolling_std_24
+    - hour
+    - day_of_week
+    - month
+    - is_weekend
+retraining:
+  strategy: no_retraining
+  # Prices are usable only after delivery end, so the error for the decision
+  # hour never exists yet. Anchoring the rolling window one hour back keeps a
+  # whole window_days of hourly errors reachable; see docs/forecast_availability.md.
+  actual_availability_lag_hours: 1
+evaluation:
+  metrics: [rmse, mae]
+artifacts:
+  run_prefix: run
+  output_format: parquet

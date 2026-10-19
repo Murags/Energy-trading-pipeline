@@ -29,6 +29,7 @@ def build_rolling_features(
     window_hours: Sequence[int],
     *,
     columns: Sequence[str] = DEFAULT_ROLLING_SOURCE_COLUMNS,
+    shift_hours: int = ROLLING_SHIFT_HOURS,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Append shifted rolling mean/std features and describe them in metadata.
 
@@ -45,6 +46,12 @@ def build_rolling_features(
     are retained rather than dropped; the metadata reports that policy, the
     generated columns, and how many rows lack a full window.
     """
+    if (
+        isinstance(shift_hours, bool)
+        or not isinstance(shift_hours, int)
+        or shift_hours < 1
+    ):
+        raise ValueError("shift_hours must be a positive integer")
     windows = _validate_window_hours(window_hours)
     if not df.columns.is_unique:
         raise ValueError("Duplicate column names are not supported")
@@ -63,7 +70,7 @@ def build_rolling_features(
     generated: list[str] = []
     for column in sources:
         # Shift first: the window then ends at the previous hour, not this one.
-        shifted = result[column].astype("float64").shift(ROLLING_SHIFT_HOURS)
+        shifted = result[column].astype("float64").shift(shift_hours)
         for window in windows:
             # Only complete windows aggregate, so a partial window stays null
             # instead of quietly becoming a shorter-window statistic.
@@ -77,14 +84,14 @@ def build_rolling_features(
     base_columns = [column for column in result.columns if column not in generated]
     result = result[base_columns + generated]
 
-    min_history = max(windows)
+    min_history = shift_hours + max(windows) - 1
     metadata = {
         "stage": "features.rolling",
         "source_columns": list(sources),
         "window_hours": windows,
         "statistics": list(ROLLING_STATISTICS),
         "generated_columns": generated,
-        "shift_hours": ROLLING_SHIFT_HOURS,
+        "shift_hours": shift_hours,
         "std_ddof": STD_DDOF,
         "insufficient_window_policy": INSUFFICIENT_WINDOW_POLICY,
         "min_history_hours": min_history,
@@ -96,9 +103,7 @@ def build_rolling_features(
 
 def _validate_window_hours(window_hours: Any) -> list[int]:
     """Return sorted, unique integer windows of at least the minimum length."""
-    if isinstance(window_hours, (str, bytes)) or not isinstance(
-        window_hours, Sequence
-    ):
+    if isinstance(window_hours, (str, bytes)) or not isinstance(window_hours, Sequence):
         raise ValueError(
             "window_hours must be a nonempty sequence of integers "
             f"of at least {MIN_ROLLING_WINDOW_HOURS}"

@@ -298,3 +298,92 @@ def test_excessive_window_fails_with_clear_timestamp_bounds_message():
             pd.Timestamp("2024-01-01T00:00:00Z"),
             window_days=10**20,
         )
+
+def test_day_ahead_actual_lag_starves_the_default_window_without_an_anchor():
+    """Reproduce the 167/168 defect: the target at the decision is never observed."""
+    decision = pd.Timestamp("2024-01-08T09:00:00Z")
+    # Every target whose actual is usable at the decision, under the day-ahead
+    # contract that an actual arrives at timestamp + 1 hour.
+    observable = pd.date_range(
+        decision - pd.Timedelta(days=7) - pd.Timedelta(hours=1),
+        decision - pd.Timedelta(hours=1),
+        freq="h",
+    )
+    history = make_history([2.0] * len(observable), start=observable[0].isoformat())
+
+    # The unanchored window (decision - 7d, decision] reserves a slot for the
+    # target at the decision itself, which can only ever hold 167 of 168 errors.
+    in_window = history["timestamp"] > decision - pd.Timedelta(days=7)
+    assert int(in_window.sum()) == 167
+    assert np.isnan(calculate_rolling_rmse(history, decision)["rolling_rmse"])
+
+    anchored = calculate_rolling_rmse(
+        history, decision, available_through=decision - pd.Timedelta(hours=1)
+    )
+    assert anchored["rolling_rmse"] == 2.0
+
+
+def test_anchor_excludes_errors_newer_than_the_observable_target():
+    history = make_history([2.0] * 25 + [1000.0])
+    decision = history["timestamp"].iloc[-1]
+    anchor = decision - pd.Timedelta(hours=1)
+
+    anchored = calculate_rolling_rmse(
+        history, decision, window_days=1, min_periods=1, available_through=anchor
+    )
+    unanchored = calculate_rolling_rmse(
+        history, decision, window_days=1, min_periods=1
+    )
+
+    assert anchored["rolling_rmse"] == 2.0
+    assert unanchored["rolling_rmse"] > 100.0
+
+
+def test_anchor_defaults_to_the_decision_timestamp():
+    history = make_history([3.0, -4.0] * 84)
+    decision = history["timestamp"].iloc[-1]
+
+    assert calculate_rolling_rmse(history, decision) == calculate_rolling_rmse(
+        history, decision, available_through=decision
+    )
+
+
+def test_missing_actuals_withhold_the_metric_instead_of_sliding_the_window():
+    """An anchor fixed by the schedule must not drift back onto older errors."""
+    decision = pd.Timestamp("2024-01-08T09:00:00Z")
+    targets = pd.date_range(
+        decision - pd.Timedelta(days=7), decision - pd.Timedelta(hours=1), freq="h"
+    )
+    history = make_history([2.0] * len(targets), start=targets[0].isoformat())
+    history.loc[history.index[-24:], "error"] = np.nan
+
+    result = calculate_rolling_rmse(
+        history, decision, available_through=decision - pd.Timedelta(hours=1)
+    )
+
+    assert np.isnan(result["rolling_rmse"])
+
+
+def test_anchor_may_not_follow_the_decision():
+    history = make_history([2.0] * 4)
+    decision = history["timestamp"].iloc[-1]
+    with pytest.raises(ValueError, match="available_through must not follow"):
+        calculate_rolling_rmse(
+            history,
+            decision,
+            min_periods=1,
+            available_through=decision + pd.Timedelta(hours=1),
+        )
+
+
+@pytest.mark.parametrize(
+    "available_through", [pd.Timestamp("2024-01-01T00:00:00"), "2024-01-01", 5, pd.NaT]
+)
+def test_invalid_anchor_fails_clearly(available_through):
+    with pytest.raises(ValueError, match="available_through must be a timezone-aware"):
+        calculate_rolling_rmse(
+            make_history([2.0] * 4),
+            pd.Timestamp("2024-01-08T00:00:00Z"),
+            min_periods=1,
+            available_through=available_through,
+        )

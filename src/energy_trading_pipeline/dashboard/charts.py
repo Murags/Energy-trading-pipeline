@@ -9,6 +9,8 @@ STRATEGY_COLORS = {
 	"fixed_schedule": "#23875B",
 	"performance_triggered": "#C44747",
 }
+# The observed spread is not a strategy, so it stays neutral against all three.
+ACTUAL_COLOR = "#6E6E6E"
 
 
 def _figure(y_title: str, *, time_axis: bool = True) -> go.Figure:
@@ -27,22 +29,36 @@ def _figure(y_title: str, *, time_axis: bool = True) -> go.Figure:
 
 
 def forecast_vs_actual_chart(forecasts: pd.DataFrame) -> go.Figure:
-	"""Plot each strategy's stored predictions and actual spreads, keeping gaps."""
+	"""Plot each strategy's predictions against one shared actual spread.
+
+	Strategies are only comparable when they share a timeline and its actuals,
+	so the actual series is drawn once. Plotting it per strategy would stack
+	identical lines and leave whichever drew last the only one visible.
+	"""
 	figure = _figure("Spread (EUR/MWh)")
-	for strategy, rows in forecasts.sort_values("timestamp").groupby("strategy"):
-		for column in ("prediction", "actual"):
-			figure.add_trace(go.Scatter(
-				x=rows["timestamp"].tolist(),
-				y=rows[column].tolist(),
-				name=f"{strategy}: {column}",
-				legendgroup=str(strategy),
-				mode="lines+markers",
-				connectgaps=False,
-				line={
-					"color": STRATEGY_COLORS.get(str(strategy)),
-					"dash": "dash" if column == "actual" else "solid",
-				},
-			))
+	ordered = forecasts.sort_values("timestamp")
+	for strategy, rows in ordered.groupby("strategy"):
+		figure.add_trace(go.Scatter(
+			x=rows["timestamp"].tolist(),
+			y=rows["prediction"].tolist(),
+			name=f"{strategy}: prediction",
+			legendgroup=str(strategy),
+			mode="lines+markers",
+			connectgaps=False,
+			line={"color": STRATEGY_COLORS.get(str(strategy)), "dash": "solid"},
+		))
+	if ordered.empty:
+		return figure
+	actual = ordered.drop_duplicates("timestamp")
+	figure.add_trace(go.Scatter(
+		x=actual["timestamp"].tolist(),
+		y=actual["actual"].tolist(),
+		name="actual",
+		legendgroup="actual",
+		mode="lines+markers",
+		connectgaps=False,
+		line={"color": ACTUAL_COLOR, "dash": "dash"},
+	))
 	return figure
 
 

@@ -30,15 +30,26 @@ def calculate_rolling_rmse(
 	*,
 	window_days: int = 7,
 	min_periods: int | None = None,
+	available_through: pd.Timestamp | None = None,
 ) -> dict[str, float]:
 	"""Return `rolling_rmse` using only errors observable at this decision.
 
 	Require timezone-aware `timestamp` values and real numeric `error` values.
-	Select the elapsed UTC interval (decision - window_days, decision]. When
-	`forecast_timestamp` is present, issuance must also be at or before the
-	decision. Callers must leave errors missing until actuals are available,
-	as required by the canonical forecast log contract; timestamps alone cannot
-	establish whether an actual was published late.
+	Select the elapsed UTC interval (anchor - window_days, anchor], where the
+	anchor is `available_through` when supplied and `decision_timestamp`
+	otherwise. When `forecast_timestamp` is present, issuance must also be at
+	or before the decision. Callers must leave errors missing until actuals are
+	available, as required by the canonical forecast log contract; timestamps
+	alone cannot establish whether an actual was published late.
+
+	`available_through` is the latest target whose actual is observable at the
+	decision, and must not follow it. Supply it whenever actuals arrive after
+	their target hour: under the day-ahead contract an actual is usable only at
+	`timestamp + 1 hour`, so the target at the decision instant is never
+	observable and an anchor of `decision - 1 hour` is what keeps a whole
+	`window_days` of hourly errors reachable. Anchor on the decision schedule
+	rather than on the newest observed row, so that missing actuals withhold the
+	metric instead of silently sliding the window into older errors.
 
 	Missing errors do not count toward `min_periods`, which defaults to
 	window_days * 24 for hourly forecasts. Return NaN when fewer errors are
@@ -67,13 +78,26 @@ def calculate_rolling_rmse(
 		or decision_timestamp.tzinfo is None
 	):
 		raise ValueError("decision_timestamp must be a timezone-aware pandas timestamp")
+	if available_through is not None and (
+		not isinstance(available_through, pd.Timestamp)
+		or pd.isna(available_through)
+		or available_through.tzinfo is None
+	):
+		raise ValueError("available_through must be a timezone-aware pandas timestamp")
 	try:
 		decision = decision_timestamp.tz_convert("UTC").as_unit("ns")
-		window_start = decision - pd.Timedelta(days=window_days)
+		anchor = (
+			decision
+			if available_through is None
+			else available_through.tz_convert("UTC").as_unit("ns")
+		)
+		window_start = anchor - pd.Timedelta(days=window_days)
 	except (ValueError, OverflowError) as exc:
 		raise ValueError(
 			"window_days and decision_timestamp exceed timestamp bounds"
 		) from exc
+	if anchor > decision:
+		raise ValueError("available_through must not follow decision_timestamp")
 	if not isinstance(forecast_history, pd.DataFrame):
 		raise ValueError("forecast_history must be a pandas DataFrame")
 	if not forecast_history.columns.is_unique:
@@ -83,7 +107,7 @@ def calculate_rolling_rmse(
 		raise ValueError(f"Missing required forecast history columns: {missing}")
 
 	timestamps = _utc_timestamps(forecast_history["timestamp"], "timestamp")
-	available = (timestamps > window_start) & (timestamps <= decision)
+	available = (timestamps > window_start) & (timestamps <= anchor)
 	if "forecast_timestamp" in forecast_history:
 		issuance = _utc_timestamps(
 			forecast_history["forecast_timestamp"], "forecast_timestamp"

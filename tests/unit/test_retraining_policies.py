@@ -447,3 +447,71 @@ def test_performance_triggered_rejects_backwards_decisions(empty_history):
     )
     with pytest.raises(ValueError, match="must not move backwards"):
         policy.should_retrain(pd.Timestamp("2024-01-01T00:00:00Z"), empty_history)
+
+
+def test_performance_triggered_default_lag_anchors_on_the_decision():
+    """Zero lag preserves the legacy contract: the decision target may count."""
+    policy = PerformanceTriggeredPolicy(threshold=0.5, min_periods=1)
+    history = make_history(
+        ["2024-01-02T00:00:00Z"], strategy="performance_triggered"
+    )
+
+    assert policy.actual_availability_lag_hours == 0
+    assert policy.should_retrain(pd.Timestamp("2024-01-02T00:00:00Z"), history)
+
+
+def test_performance_triggered_lag_excludes_the_unobservable_decision_target():
+    policy = PerformanceTriggeredPolicy(
+        threshold=0.5, min_periods=1, actual_availability_lag_hours=1
+    )
+    decision = pd.Timestamp("2024-01-02T00:00:00Z")
+    history = make_history([decision.isoformat()], strategy="performance_triggered")
+
+    # The only error belongs to the decision hour, whose actual is not yet usable.
+    assert not policy.should_retrain(decision, history)
+    assert pd.isna(policy.rolling_rmse)
+
+
+def test_performance_triggered_lag_restores_a_full_day_ahead_window():
+    """The seven-day default is reachable once the window anchors on availability."""
+    decision = pd.Timestamp("2024-01-08T09:00:00Z")
+    observable = pd.date_range(
+        decision - pd.Timedelta(days=7) - pd.Timedelta(hours=1),
+        decision - pd.Timedelta(hours=1),
+        freq="h",
+    )
+    history = make_history(
+        [value.isoformat() for value in observable], strategy="performance_triggered"
+    )
+
+    starved = PerformanceTriggeredPolicy(threshold=0.5)
+    assert not starved.should_retrain(decision, history)
+    assert pd.isna(starved.rolling_rmse)
+
+    anchored = PerformanceTriggeredPolicy(
+        threshold=0.5, actual_availability_lag_hours=1
+    )
+    assert anchored.should_retrain(decision, history)
+    assert anchored.rolling_rmse == pytest.approx(1.0)
+
+
+def test_performance_triggered_reads_availability_lag_from_config():
+    config = load_config("configs/experiment.yaml")
+    config["retraining"]["actual_availability_lag_hours"] = 1
+
+    policy = PerformanceTriggeredPolicy.from_config(config)
+
+    assert policy.actual_availability_lag_hours == 1
+    assert PerformanceTriggeredPolicy.from_config(
+        load_config("configs/experiment.yaml")
+    ).actual_availability_lag_hours == 0
+
+
+@pytest.mark.parametrize("value", [-1, True, 1.5, "1", None])
+def test_performance_triggered_rejects_invalid_availability_lag(value):
+    with pytest.raises(
+        ValueError, match="actual_availability_lag_hours.*non-negative integer"
+    ):
+        PerformanceTriggeredPolicy(
+            threshold=1.0, actual_availability_lag_hours=value
+        )

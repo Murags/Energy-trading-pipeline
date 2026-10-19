@@ -160,10 +160,28 @@ def test_fixed_schedule_runner_hands_off_exact_training_window(
         event_logger=events.append,
     )
 
-    with pytest.raises(NotImplementedError, match="Retraining execution"):
-        run_backtest(
-            frame, config, strategy=policy.strategy, policy_hook=hook, **kwargs
-        )
+    refits = []
+    forecasts = run_backtest(
+        frame,
+        config,
+        strategy=policy.strategy,
+        policy_hook=hook,
+        refit_logger=refits.append,
+        **kwargs,
+    )
+
+    assert len(refits) == 1
+    assert refits[0]["timestamp"] == due.isoformat()
+    assert refits[0]["training_window_start"] == windows[due].start.isoformat()
+    assert refits[0]["training_window_end"] == windows[due].end.isoformat()
+    # Blocks issued from the due date onwards carry the refitted version.
+    issued_from_due = forecasts["forecast_timestamp"] >= due
+    assert (forecasts.loc[issued_from_due, "model_version"] == refits[0][
+        "model_version"
+    ]).all()
+    assert (
+        forecasts.loc[~issued_from_due, "model_version"] == kwargs["model_version"]
+    ).all()
 
     assert len(events) == 1
     assert events[0]["timestamp"] == due.isoformat()
@@ -174,7 +192,7 @@ def test_fixed_schedule_runner_hands_off_exact_training_window(
         "end": windows[due].end.isoformat(),
     }
     assert windows[due].end < due
-    assert not kwargs["forecast_path"].exists()
+    assert kwargs["forecast_path"].exists()
 
 
 def test_loaded_baseline_matches_without_fitting(runner_inputs, monkeypatch):
@@ -220,10 +238,66 @@ def test_future_actual_changes_cannot_change_predictions(runner_inputs):
     np.testing.assert_array_equal(actual["prediction"], expected["prediction"])
 
 
-def test_positive_hook_is_not_silently_ignored(runner_inputs):
+def test_positive_hook_refits_on_every_block(runner_inputs):
     frame, config, kwargs = runner_inputs
-    with pytest.raises(NotImplementedError, match="Epic 7"):
-        run_backtest(frame, config, policy_hook=lambda timestamp, history: True, **kwargs)
+    refits = []
+    forecasts = run_backtest(
+        frame,
+        config,
+        policy_hook=lambda timestamp, history: True,
+        refit_logger=refits.append,
+        **kwargs,
+    )
+    windows = generate_backtest_windows_from_config(config)
+
+    assert len(refits) == len(windows)
+    versions = [record["model_version"] for record in refits]
+    assert versions == [
+        f"{kwargs['model_version']}_refit_{index:03d}"
+        for index in range(1, len(windows) + 1)
+    ]
+    assert set(forecasts["model_version"]) == set(versions)
+    for version in versions:
+        assert (kwargs["model_output_path"].parent / f"{version}.json").is_file()
+
+
+def test_refit_without_a_model_directory_fails_clearly(runner_inputs):
+    frame, config, kwargs = runner_inputs
+    run_backtest(frame, config, **kwargs)
+    kwargs["initial_model_path"] = kwargs.pop("model_output_path")
+    kwargs["initial_model_history_end"] = pd.Timestamp("2024-01-02", tz="UTC")
+    with pytest.raises(ValueError, match="refit_model_dir"):
+        run_backtest(
+            frame,
+            config,
+            policy_hook=lambda timestamp, history: True,
+            **kwargs,
+        )
+
+
+def test_refits_use_the_same_contract_as_the_initial_fit(runner_inputs, tmp_path):
+    """Every strategy differs only in when it refits, never in how it fits."""
+    frame, config, kwargs = runner_inputs
+    windows = generate_backtest_windows_from_config(config)
+    fit = XGBoostSpreadModel.fit
+    fitted = []
+
+    def spy_fit(self, features, target):
+        fitted.append((list(features.columns), len(target)))
+        return fit(self, features, target)
+
+    XGBoostSpreadModel.fit = spy_fit
+    try:
+        run_backtest(
+            frame, config, policy_hook=lambda timestamp, history: True, **kwargs
+        )
+    finally:
+        XGBoostSpreadModel.fit = fit
+
+    # One initial fit plus one refit per window, all on the same contract.
+    assert len(fitted) == 1 + len(windows)
+    assert all(columns == ["hour"] for columns, _ in fitted)
+    assert {rows for _, rows in fitted} == {24}
 
 
 def test_loaded_model_requires_pre_evaluation_provenance(runner_inputs):
