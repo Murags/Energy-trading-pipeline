@@ -20,6 +20,9 @@ from energy_trading_pipeline.features.availability import (
     build_availability_dataset,
     prepare_configured_day_ahead,
 )
+from energy_trading_pipeline.retraining.performance_triggered import (
+    PerformanceTriggeredPolicy,
+)
 
 
 @pytest.fixture
@@ -200,3 +203,123 @@ def test_direct_backtest_never_overwrites(inputs, tmp_path):
     with pytest.raises(FileExistsError):
         run(frame, config, tmp_path, "saved")
     assert (tmp_path / "saved" / "model.json").read_bytes() == original
+
+
+def test_rolling_rmse_is_unreachable_on_the_day_ahead_decision_schedule(
+    inputs, tmp_path
+):
+    """Runner-shaped 167/168: a dense window still misses the decision hour."""
+    config, prices, _ = inputs
+    config = deepcopy(config)
+    config["backtest"]["evaluation_end_date"] = "2025-01-17"
+    frame, _ = build_availability_dataset(prices, config, source_dataset="fixture")
+    observed = {}
+
+    def hook_for(policy, name):
+        def hook(issuance, history):
+            policy.should_retrain(issuance, history)
+            observed.setdefault(name, []).append(policy.rolling_rmse)
+            return False
+
+        return hook
+
+    starved = PerformanceTriggeredPolicy(threshold=10.0**9, window_days=1)
+    anchored = PerformanceTriggeredPolicy(
+        threshold=10.0**9, window_days=1, actual_availability_lag_hours=1
+    )
+    run(frame, config, tmp_path, "starved", policy_hook=hook_for(starved, "starved"))
+    run(frame, config, tmp_path, "anchored", policy_hook=hook_for(anchored, "anchored"))
+
+    # The decision hour's actual is never usable, so the unanchored window holds
+    # at most 23 of the 24 hourly errors it requires and stays warm-up forever.
+    assert all(np.isnan(value) for value in observed["starved"])
+    assert np.isnan(observed["anchored"][0])
+    assert np.isfinite(observed["anchored"][-1])
+
+
+def test_day_ahead_rolling_rmse_matches_errors_observable_at_issuance(
+    inputs, tmp_path
+):
+    config, prices, _ = inputs
+    config = deepcopy(config)
+    config["backtest"]["evaluation_end_date"] = "2025-01-17"
+    frame, _ = build_availability_dataset(prices, config, source_dataset="fixture")
+    policy = PerformanceTriggeredPolicy(
+        threshold=10.0**9, window_days=1, actual_availability_lag_hours=1
+    )
+    seen = []
+
+    def hook(issuance, history):
+        policy.should_retrain(issuance, history)
+        seen.append((issuance, history.copy(), policy.rolling_rmse))
+        return False
+
+    run(frame, config, tmp_path, "matches", policy_hook=hook)
+
+    issuance, history, reported = seen[-1]
+    anchor = issuance - pd.Timedelta(hours=1)
+    window = history[
+        (history["timestamp"] > anchor - pd.Timedelta(days=1))
+        & (history["timestamp"] <= anchor)
+    ]
+    assert len(window) == 24
+    expected = float(np.sqrt((window["error"].to_numpy(dtype=float) ** 2).mean()))
+    assert reported == pytest.approx(expected)
+
+
+def test_strategies_share_one_timeline_and_differ_only_in_refits(inputs, tmp_path):
+    """The comparison is only fair if nothing but refit timing varies."""
+    config, prices, _ = inputs
+    config = deepcopy(config)
+    config["backtest"]["evaluation_end_date"] = "2025-01-17"
+    frame, _ = build_availability_dataset(prices, config, source_dataset="fixture")
+    results = {}
+    for name, hook in (
+        ("no_retraining", None),
+        ("always", lambda issuance, history: True),
+    ):
+        results[name] = run(
+            frame,
+            config,
+            tmp_path,
+            name,
+            policy_hook=hook,
+            strategy="no_retraining",
+        )
+
+    static, refitting = results["no_retraining"], results["always"]
+    for column in ("timestamp", "forecast_timestamp", "actual"):
+        pd.testing.assert_series_equal(static[column], refitting[column])
+    # The first block is issued before any refit, so it must be identical.
+    first = static["forecast_timestamp"].min()
+    pd.testing.assert_series_equal(
+        static.loc[static["forecast_timestamp"] == first, "prediction"],
+        refitting.loc[refitting["forecast_timestamp"] == first, "prediction"],
+    )
+    assert static["model_version"].nunique() == 1
+    assert refitting["model_version"].nunique() > 1
+
+
+def test_refit_cannot_use_actuals_published_after_its_issuance(inputs, tmp_path):
+    config, prices, _ = inputs
+    config = deepcopy(config)
+    config["backtest"]["evaluation_end_date"] = "2025-01-17"
+    original, _ = build_availability_dataset(prices, config, source_dataset="fixture")
+    windows = generate_backtest_windows_from_config(config)
+    second = windows[1].issuance
+
+    mutated_prices = prices.copy(deep=True)
+    later = mutated_prices["timestamp"] + pd.Timedelta(hours=1) > second
+    mutated_prices.loc[later, "price_de"] += 10000
+    mutated, _ = build_availability_dataset(
+        mutated_prices, config, source_dataset="fixture"
+    )
+
+    hook = lambda issuance, history: True  # noqa: E731 - refit at every issuance
+    before = run(original, config, tmp_path, "before_mut", policy_hook=hook)
+    after = run(mutated, config, tmp_path, "after_mut", policy_hook=hook)
+
+    issued = before["forecast_timestamp"] <= second
+    np.testing.assert_array_equal(
+        before.loc[issued, "prediction"], after.loc[issued, "prediction"]
+    )

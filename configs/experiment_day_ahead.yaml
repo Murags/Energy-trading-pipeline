@@ -45,6 +45,10 @@ backtest:
     - is_weekend
 retraining:
   strategy: no_retraining
+  # Prices are usable only after delivery end, so the error for the decision
+  # hour never exists yet. Anchoring the rolling window one hour back keeps a
+  # whole window_days of hourly errors reachable; see docs/forecast_availability.md.
+  actual_availability_lag_hours: 1
 evaluation:
   metrics: [rmse, mae]
 artifacts:

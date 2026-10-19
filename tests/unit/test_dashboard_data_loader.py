@@ -124,7 +124,11 @@ def test_streamlit_dashboard_views_filters_and_read_only_exports(
         figure = json.loads(element.proto.spec)
         for trace in figure["data"]:
             if trace["type"] == "scatter":
-                assert "no_retraining" in trace["name"]
+                # No unselected strategy may reach a chart. The shared actual
+                # series is common to every strategy, so it carries no label.
+                assert "fixed_schedule" not in trace["name"]
+                assert "performance_triggered" not in trace["name"]
+                assert "no_retraining" in trace["name"] or trace["name"] == "actual"
     assert any("No retraining events" in info.value for info in app.info)
     app.sidebar.multiselect[0].set_value([]).run()
     assert not app.exception

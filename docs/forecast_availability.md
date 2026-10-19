@@ -28,3 +28,21 @@ The supplied January 1–7, 2025 interval is an **engineering smoke test**, not 
 The static run does not tune parameters, calculate the final strategy comparison, fix the rolling-RMSE trigger, or execute refits. Those are subsequent stories. Loaded models must match feature/target/parameter settings and carry a caller-attested upper history bound before first issuance. The older fixed-UTC forecast-window behavior remains available for existing configurations without `backtest.mode: day_ahead`.
 
 Verification covers DST delivery counts, invalid issue times, source gaps/duplicates/nonfinite values, exact usability boundaries, output integrity/no-overwrite, and mutations of observations usable after issuance. Such mutations must leave the issued predictors and XGBoost predictions unchanged, while retrospective actuals may change.
+
+## Rolling RMSE on the day-ahead decision schedule
+
+`calculate_rolling_rmse` selects the elapsed interval `(anchor - window_days, anchor]`. The anchor defaults to the decision instant, which reserves a slot for the target hour at that instant. Under this protocol that hour's actual is usable only at `timestamp + 1 hour`, so the slot can never be filled: a dense seven-day history yields 167 observed errors against a default `min_periods` of 168, the metric stays `NaN`, and `performance_triggered` would remain in warm-up for the whole evaluation.
+
+Pass `available_through`, the newest target whose actual is observable at the decision, to anchor the window on availability instead. `PerformanceTriggeredPolicy` derives it from `retraining.actual_availability_lag_hours`, which this experiment sets to `1` to match the usable-after rule. The default of `0` preserves the earlier contract for configurations without `backtest.mode: day_ahead`.
+
+The anchor follows the decision schedule, never the newest observed row. Missing actuals therefore withhold the metric rather than sliding the window back onto older errors and reporting them as current. Verification reproduces the 167/168 starvation both as arithmetic and through a backtest-runner policy hook, and confirms the anchored metric equals the RMSE of exactly the errors usable at that issuance.
+
+## Executing retraining
+
+A positive policy decision now refits rather than aborting. The refit fits a fresh model on that window's training interval using the same configuration, predictor list, and availability rules as the initial fit, so the three strategies differ only in *when* they refit. Supplying a policy preflights every candidate training window before any artifact is written, so an unusable refit fails fast rather than part-way through a run.
+
+Each refit is saved as `<model_version>_refit_NNN.json` beside the initial `model.json`, and later blocks are logged under that version, so `forecasts.parquet` carries model lineage. `model.json` always remains the initial fit identified by the run's `model_version`. Every run writes `retraining_events.parquet` with the canonical columns, empty when nothing refit, and records `model_versions` and `retraining_event_count` in run metadata.
+
+Refit training windows end at or before the issuance that requested them, and are checked for predictor and label availability exactly as the initial window is. Verification confirms that mutating prices usable only after an issuance leaves that issuance's refit, predictors, and predictions unchanged.
+
+A retraining *event* is a completed refit, not a request. Policy hooks may log requests separately; the runner's `refit_logger` fires only after a model has actually been fitted and saved.

@@ -75,13 +75,22 @@ def test_forecast_chart_separates_strategies_and_preserves_missing_actuals(
     chart_frames,
 ):
     figure = charts.forecast_vs_actual_chart(chart_frames["forecasts"])
-    assert len(figure.data) == 4
+    # One prediction trace per strategy, plus a single shared actual series:
+    # strategies share one timeline, so repeating actuals would hide all but
+    # the last drawn.
+    assert len(figure.data) == 3
+    assert [trace.name for trace in figure.data] == [
+        "fixed_schedule: prediction",
+        "no_retraining: prediction",
+        "actual",
+    ]
+    assert sum(trace.legendgroup == "actual" for trace in figure.data) == 1
     for trace in figure.data:
-        assert trace.legendgroup in ("fixed_schedule", "no_retraining")
+        assert trace.legendgroup in ("fixed_schedule", "no_retraining", "actual")
         assert pd.DatetimeIndex(trace.x).is_monotonic_increasing
         assert trace.connectgaps is False
         assert trace.mode == "lines+markers"
-        values = [1.0, np.nan, 3.0] if "actual" in trace.name else [0.0, 1.0, 2.0]
+        values = [1.0, np.nan, 3.0] if trace.name == "actual" else [0.0, 1.0, 2.0]
         np.testing.assert_equal(list(trace.y), values)
 
 
@@ -119,3 +128,42 @@ def test_comparison_chart_does_not_recalculate_metrics(chart_frames):
     assert [trace.name for trace in figure.data] == ["RMSE", "MAE"]
     assert list(figure.data[0].y) == [123.0, 456.0]
     assert list(figure.data[1].y) == [12.0, 45.0]
+
+def test_date_filter_narrows_rows_without_changing_stored_values():
+    """Filtering is display-only: it selects rows, never recomputes a value."""
+    from energy_trading_pipeline.dashboard.app import filter_by_dates
+
+    timestamps = pd.date_range("2024-03-01", periods=72, freq="h", tz="UTC")
+    frame = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "prediction": np.arange(72.0),
+            "actual": np.arange(72.0) + 1,
+            "strategy": "no_retraining",
+        }
+    )
+    start = pd.Timestamp("2024-03-02", tz="UTC")
+    end = pd.Timestamp("2024-03-03", tz="UTC")
+
+    result = filter_by_dates(frame, start, end)
+
+    assert len(result) == 24
+    assert result["timestamp"].min() == start
+    assert result["timestamp"].max() == end - pd.Timedelta(hours=1)
+    # The half-open interval excludes the end instant itself.
+    assert (result["timestamp"] < end).all()
+    pd.testing.assert_frame_equal(
+        result.reset_index(drop=True),
+        frame.loc[(frame["timestamp"] >= start) & (frame["timestamp"] < end)]
+        .reset_index(drop=True),
+    )
+
+
+def test_date_filter_handles_an_empty_export():
+    from energy_trading_pipeline.dashboard.app import filter_by_dates
+
+    empty = pd.DataFrame({"timestamp": pd.to_datetime([], utc=True)})
+    result = filter_by_dates(
+        empty, pd.Timestamp("2024-01-01", tz="UTC"), pd.Timestamp("2024-02-01", tz="UTC")
+    )
+    assert result.empty

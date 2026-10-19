@@ -15,6 +15,51 @@ from energy_trading_pipeline.dashboard.data_loader import (
 )
 
 
+def filter_by_dates(
+	frame: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp
+) -> pd.DataFrame:
+	"""Return rows in the half-open UTC interval, leaving stored values untouched.
+
+	Filtering is display-only. It never recomputes a metric, so a narrowed view
+	shows the same numbers the export recorded for those hours.
+	"""
+	if frame.empty:
+		return frame
+	timestamps = frame["timestamp"]
+	return frame.loc[(timestamps >= start) & (timestamps < end)].copy()
+
+
+def _apply_date_filter(
+	st, forecasts: pd.DataFrame, events: pd.DataFrame
+) -> tuple[pd.DataFrame, pd.DataFrame, tuple[pd.Timestamp, pd.Timestamp]]:
+	"""Offer a delivery-date range so hourly detail is legible on long runs."""
+	first = forecasts["timestamp"].min()
+	last = forecasts["timestamp"].max()
+	st.sidebar.caption(
+		f"{len(forecasts):,} forecast rows from {first.date()} to {last.date()}"
+	)
+	# A year of hourly points per strategy is unreadable at full extent, so the
+	# default view is the last week rather than everything.
+	default_start = max(first, last - pd.Timedelta(days=6)).date()
+	chosen = st.sidebar.date_input(
+		"Delivery dates (UTC)",
+		value=(default_start, last.date()),
+		min_value=first.date(),
+		max_value=last.date(),
+	)
+	if not isinstance(chosen, tuple) or len(chosen) != 2:
+		return forecasts, events, (first, last)
+	start = pd.Timestamp(chosen[0], tz="UTC")
+	end = pd.Timestamp(chosen[1], tz="UTC") + pd.Timedelta(days=1)
+	if st.sidebar.checkbox("Show the whole run instead", value=False):
+		start, end = first, last + pd.Timedelta(hours=1)
+	return (
+		filter_by_dates(forecasts, start, end),
+		filter_by_dates(events, start, end),
+		(start, end),
+	)
+
+
 def main() -> None:
 	"""Render exported results; importing this module needs no Streamlit runtime."""
 	import streamlit as st
@@ -47,6 +92,10 @@ def main() -> None:
 		artifacts[name].loc[artifacts[name]["strategy"].isin(selected)].copy()
 		for name in ("forecasts", "metrics", "retraining_events")
 	)
+	forecasts, events, window = _apply_date_filter(st, forecasts, events)
+	if forecasts.empty:
+		st.info("No forecasts in the selected dates.")
+		return
 	referenced_versions = pd.concat([
 		forecasts["model_version"], events["model_version"]
 	]).dropna().unique()
@@ -62,6 +111,10 @@ def main() -> None:
 			f"to {row.evaluation_end.isoformat()}"
 		)
 	st.subheader("Error Summary")
+	st.caption(
+		"Exported metrics cover the whole evaluation window. The date filter "
+		"narrows the charts and tables below, never these numbers."
+	)
 	if metrics.empty:
 		st.info("No metric summaries for the selected strategies.")
 	st.dataframe(
@@ -83,6 +136,12 @@ def main() -> None:
 	)
 	with forecast_tab:
 		st.subheader("Forecast vs Actual")
+		days = (window[1] - window[0]) / pd.Timedelta(days=1)
+		st.caption(
+			f"Showing {len(forecasts):,} rows over {days:.0f} day(s). "
+			"Each delivery day's 24 hours are issued together at 10:00 "
+			"Europe/Berlin on the preceding day."
+		)
 		if forecasts.empty:
 			st.info("No forecasts for the selected strategies.")
 		elif forecasts["actual"].isna().all():

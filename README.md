@@ -159,8 +159,8 @@ uv run python -m energy_trading_pipeline.cli --config configs/experiment.yaml
 
 ## Backtesting
 
-The `backtest` command runs the static `no_retraining` baseline from an existing
-local feature Parquet. Create a copy of the experiment config, for example
+The `backtest` command runs any of the three retraining strategies from an
+existing local feature Parquet. Create a copy of the experiment config, for example
 `configs/backtest.yaml`, and set these sections for the desired data range:
 
 ```yaml
@@ -188,10 +188,12 @@ uv run python -m energy_trading_pipeline.cli backtest \
 
 Alternatively, put `paths` (`feature_data_parquet_path`, `models_dir`, `logs_dir`)
 and `model.params` directly in the experiment YAML and supply only `--config`.
-Relative artifact/input paths resolve against the repository root. The current
-shared sample config uses `fixed_schedule`; select `no_retraining` explicitly for
-this command. The CLI remains static-only; the policy API below does not enable
-scheduled model refits through this command.
+Relative artifact/input paths resolve against the repository root. Set
+`retraining.strategy` to `no_retraining`, `fixed_schedule`, or
+`performance_triggered`; each strategy reads only its own settings. Every run
+writes `retraining_events.parquet` beside the forecast log, empty when nothing
+refit, and records `model_versions` plus `retraining_event_count` in its run
+metadata.
 
 ### Input and timing contract
 
@@ -287,9 +289,12 @@ decision, the logger receives UTC ISO `timestamp`, `strategy`, `trigger_reason`,
 records describe scheduled requests, not completed training events; the caller
 owns execution, model-version metadata, and persistence.
 
-The programmatic runner accepts this hook but still raises `NotImplementedError`
-on a positive decision because retraining execution is not yet implemented.
-The performance policy and shared event writer below are separate from execution.
+The programmatic runner executes a positive decision: it fits a fresh model on
+that window's training interval under the same configuration, predictors, and
+availability rules as the initial fit, saves it as
+`<model_version>_refit_NNN.json`, and logs the following blocks under that
+version. Pass `refit_logger` to receive one record per completed refit. These
+policy records describe requests; `refit_logger` records confirmed executions.
 
 ### Rolling RMSE Monitor
 
@@ -388,9 +393,10 @@ Empty logs retain the same schema. For fixed-schedule records, flatten the exist
 `training_window` handoff, supply the model version, and leave inapplicable
 `threshold` and `rolling_rmse` values missing.
 
-The CLI remains static-only, and the programmatic runner still rejects positive
-refit requests with `NotImplementedError`. This story adds policy decisions and
-event persistence, not retraining execution or model lifecycle changes.
+The CLI builds the configured policy, executes its refits, and persists the
+validated event log. Scheduled events leave `threshold` and `rolling_rmse`
+missing; performance-triggered events carry the metric that exceeded the
+threshold at that issuance.
 
 ```bash
 uv run pytest tests/unit/test_retraining_policies.py \

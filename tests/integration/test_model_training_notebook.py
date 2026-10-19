@@ -32,7 +32,10 @@ def test_notebook_presents_every_training_stage():
     assert "Stage 3 - Chronological train/validation split" in markdown
     assert "Stage 4 - Training with the CLI training function" in markdown
     assert "Stage 5 - Reload the artifact and reproduce its metrics" in markdown
+    assert "Stage 6 - How accurate is the model?" in markdown
     assert "One-step-ahead, not day-ahead" in markdown
+    # The notebook stays focused on training; it no longer surveys the registry.
+    assert "Saved models in the registry" not in markdown
 
 
 def test_all_code_cells_execute_in_fixture_mode(monkeypatch):
@@ -82,6 +85,23 @@ def test_all_code_cells_execute_in_fixture_mode(monkeypatch):
         validation_results["absolute_error"].mean(), run_metadata["metrics"]["mae"]
     )
 
-    assert namespace["registry_summary"]["status"].tolist() == ["rescored"]
+    # Stage 6 reports accuracy, including a direction F1 against an always-yes
+    # baseline, so the notebook answers "how accurate is it?" explicitly.
+    accuracy = namespace["accuracy_summary"].set_index("measure")["value"]
+    assert {"RMSE (EUR/MWh)", "MAE (EUR/MWh)", "R2 (variance explained)"}.issubset(
+        accuracy.index
+    )
+    np.testing.assert_allclose(
+        accuracy["RMSE (EUR/MWh)"], run_metadata["metrics"]["rmse"]
+    )
+    np.testing.assert_allclose(
+        accuracy["MAE (EUR/MWh)"], run_metadata["metrics"]["mae"]
+    )
+    direction = namespace["direction_summary"]
+    if not direction.empty:
+        assert direction["forecast"].tolist() == ["xgboost", 'baseline: always "yes"']
+        scores = direction[["accuracy", "precision", "recall", "f1"]]
+        assert ((scores >= 0) & (scores <= 1)).all().all()
+
     assert namespace["canonical_state_after"] == namespace["canonical_state_before"]
     namespace["workspace"].cleanup()

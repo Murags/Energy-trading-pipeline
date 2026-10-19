@@ -19,6 +19,16 @@ from energy_trading_pipeline.backtesting.forecast_log import (
     build_forecast_log,
     write_forecast_log,
 )
+from energy_trading_pipeline.retraining.events import (
+    RETRAINING_EVENT_COLUMNS,
+    write_retraining_events,
+)
+from energy_trading_pipeline.retraining.fixed_schedule import FixedSchedulePolicy
+from energy_trading_pipeline.retraining.no_retraining import NoRetrainingPolicy
+from energy_trading_pipeline.retraining.performance_triggered import (
+    PerformanceTriggeredPolicy,
+)
+from energy_trading_pipeline.retraining.policies import RetrainingPolicy
 from energy_trading_pipeline.backtesting.splitter import (
     TimeWindow,
     generate_backtest_windows_from_config,
@@ -36,6 +46,39 @@ from energy_trading_pipeline.utils.io import write_run_metadata
 from energy_trading_pipeline.utils.time import generate_run_id
 
 PolicyHook = Callable[[pd.Timestamp, pd.DataFrame], bool]
+
+
+def build_policy(config: Mapping[str, Any]) -> RetrainingPolicy:
+    """Construct the configured strategy's policy from experiment config.
+
+    Each strategy reads only its own settings, so an unrelated missing key never
+    blocks a run. Returns a fresh instance; policies carry per-run decision state.
+    """
+    strategy = config["retraining"]["strategy"]
+    if strategy == "no_retraining":
+        return NoRetrainingPolicy()
+    if strategy == "fixed_schedule":
+        return FixedSchedulePolicy.from_config(config)
+    return PerformanceTriggeredPolicy.from_config(config)
+
+
+def _trigger_details(policy: RetrainingPolicy) -> dict[str, Any]:
+    """Describe why this policy last fired, for the canonical event record.
+
+    Scheduled retraining has no threshold or metric, which the event builder
+    records as missing rather than inventing a number.
+    """
+    if isinstance(policy, PerformanceTriggeredPolicy):
+        return {
+            "trigger_reason": "rolling_rmse_exceeds_threshold",
+            "threshold": policy.threshold,
+            "rolling_rmse": policy.rolling_rmse,
+        }
+    return {
+        "trigger_reason": "fixed_schedule_interval_elapsed",
+        "threshold": float("nan"),
+        "rolling_rmse": float("nan"),
+    }
 
 
 def run_configured_backtest(
@@ -74,13 +117,13 @@ def run_configured_backtest(
         )
     model = XGBoostSpreadModel.from_config(model_config)
     retraining = config.get("retraining")
-    if (
-        not isinstance(retraining, Mapping)
-        or retraining.get("strategy") != "no_retraining"
+    if not isinstance(retraining, Mapping) or retraining.get("strategy") not in (
+        STRATEGIES
     ):
         raise ValueError(
-            "Backtesting CLI currently requires retraining.strategy: no_retraining"
+            f"retraining.strategy must be one of {sorted(STRATEGIES)}"
         )
+    policy = build_policy(config)
     windows = generate_backtest_windows_from_config(config)
     columns = config["backtest"].get("feature_columns")
     if not isinstance(columns, list) or not columns:
@@ -112,6 +155,7 @@ def run_configured_backtest(
         "model": str(model_dir / "model.json"),
         "forecasts": str(run_dir / "forecasts.parquet"),
         "backtest_log": str(run_dir / "backtest_log.jsonl"),
+        "retraining_events": str(run_dir / "retraining_events.parquet"),
         "run_metadata": str(run_dir / "run_metadata.yaml"),
     }
     context = {
@@ -129,6 +173,7 @@ def run_configured_backtest(
     _write_backtest_event(log_path, context, "backtest_started")
     try:
         model_dir.mkdir(parents=True, exist_ok=False)
+        events: list[dict[str, Any]] = []
         forecasts = run_backtest(
             frame,
             config,
@@ -137,6 +182,14 @@ def run_configured_backtest(
             model_output_path=Path(artifact_paths["model"]),
             forecast_path=Path(artifact_paths["forecasts"]),
             strategy=retraining["strategy"],
+            policy_hook=policy.as_policy_hook(),
+            refit_logger=lambda record: events.append(
+                {**record, **_trigger_details(policy)}
+            ),
+        )
+        write_retraining_events(
+            pd.DataFrame(events, columns=list(RETRAINING_EVENT_COLUMNS)),
+            Path(artifact_paths["retraining_events"]),
         )
         timestamps = pd.to_datetime(frame["timestamp"], utc=True)
         metadata = {
@@ -153,7 +206,22 @@ def run_configured_backtest(
             "feature_columns": columns,
             "target_column": model.target_column,
             "model_parameters": model.params,
-            "training_windows": [_window_metadata(windows[0].train)],
+            "training_windows": [
+                _window_metadata(windows[0].train),
+                *(
+                    {
+                        "start": record["training_window_start"],
+                        "end": record["training_window_end"],
+                        "model_version": record["model_version"],
+                    }
+                    for record in events
+                ),
+            ],
+            "model_versions": [
+                model_version,
+                *(record["model_version"] for record in events),
+            ],
+            "retraining_event_count": len(events),
             "validation_window": _window_metadata(windows[0].validation),
             "window_convention": "[start, end)",
             "metrics": {},
@@ -206,6 +274,34 @@ def _timestamp(value: Any, name: str) -> pd.Timestamp:
         raise ValueError(f"{name} must be a valid timezone-aware timestamp") from exc
 
 
+def _validate_training_block(
+    train: pd.DataFrame, issuance: pd.Timestamp, target: str
+) -> None:
+    """Reject a fit whose predictors or labels are not yet usable at issuance."""
+    if (train["feature_available_at"] > issuance).any():
+        raise ValueError("Training features are unavailable at issuance")
+    if (train["actual_available_at"] > issuance).any():
+        raise ValueError("training actuals are unavailable at issuance")
+    if (
+        not pd.api.types.is_numeric_dtype(train[target])
+        or not np.isfinite(train[target].to_numpy(dtype=float)).all()
+    ):
+        raise ValueError("Training actuals must be finite numeric values")
+
+
+def _save_model(model: XGBoostSpreadModel, path: Path, *, exclusive: bool) -> None:
+    """Persist a model, optionally refusing to replace an existing artifact."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not exclusive:
+        model.save(path)
+        return
+    with tempfile.TemporaryDirectory(dir=path.parent) as temporary:
+        staged = Path(temporary) / "model.json"
+        model.save(staged)
+        os.link(staged, path)  # Atomic, fails if destination exists.
+
+
 def _select_hours(frame: pd.DataFrame, window: TimeWindow) -> pd.DataFrame:
     """Fail on missing delivery hours instead of silently shortening evaluation."""
     rows = frame.loc[
@@ -231,6 +327,8 @@ def run_backtest(
     initial_model_history_end: pd.Timestamp | None = None,
     strategy: str = "no_retraining",
     policy_hook: PolicyHook | None = None,
+    refit_model_dir: Path | None = None,
+    refit_logger: Callable[[dict[str, Any]], None] | None = None,
 ) -> pd.DataFrame:
     """Train once or load a static XGBoost model and persist canonical forecasts.
 
@@ -252,10 +350,23 @@ def run_backtest(
 
     The optional hook receives issuance and an isolated canonical log of prior
     forecasts whose actuals are available then. None is the static placeholder.
-    A True decision raises NotImplementedError pending Epic 7 retraining; it is
-    never silently ignored. The returned/persisted log includes retrospective
-    actuals, while hooks see only time-filtered history. CLI run metadata and
-    registry coordination belong to the caller.
+    A True decision refits a fresh model on that window's training interval,
+    using the same configuration, predictors, and availability rules as the
+    initial fit, so every strategy differs only in when it refits. Supplying a
+    hook preflights every candidate training window, so an unusable refit fails
+    before any artifact is written.
+
+    Each refit is saved as ``<model_version>_refit_NNN.json`` under
+    ``refit_model_dir``, defaulting to the directory of ``model_output_path``,
+    and subsequent blocks are logged under that version, so the forecast log
+    carries model lineage. ``refit_logger`` receives one record per *completed*
+    refit: issuance, strategy, training window, and the new version. Trigger
+    provenance such as threshold and rolling RMSE belongs to the policy owner,
+    which is the caller, not this runner.
+
+    The returned/persisted log includes retrospective actuals, while hooks see
+    only time-filtered history. CLI run metadata and registry coordination
+    belong to the caller.
     """
     windows = generate_backtest_windows_from_config(config)
     if strategy not in STRATEGIES:
@@ -264,6 +375,8 @@ def run_backtest(
         raise ValueError("A non-baseline strategy requires a policy_hook")
     if policy_hook is not None and not callable(policy_hook):
         raise ValueError("policy_hook must be callable")
+    if refit_logger is not None and not callable(refit_logger):
+        raise ValueError("refit_logger must be callable")
     if not isinstance(model_version, str) or not model_version.strip():
         raise ValueError("model_version must be a nonempty string")
     forecast_path = Path(forecast_path)
@@ -337,17 +450,19 @@ def run_backtest(
     for window, block in zip(windows, blocks, strict=True):
         if (block["feature_available_at"] > window.issuance).any():
             raise ValueError("Forecast features are unavailable at issuance")
+    # A policy may refit at any issuance, so every candidate window is checked
+    # up front rather than failing part-way through a run.
+    refit_blocks: list[pd.DataFrame] | None = None
+    if policy_hook is not None:
+        refit_blocks = [_select_hours(frame, window.train) for window in windows]
+        for window, train_block in zip(windows, refit_blocks, strict=True):
+            _validate_training_block(train_block, window.issuance, target)
+    refit_dir = refit_model_dir
+    if refit_dir is None and model_output_path is not None:
+        refit_dir = Path(model_output_path).parent
     if initial_model_path is None:
         train = _select_hours(frame, windows[0].train)
-        if (train["feature_available_at"] > first_issuance).any():
-            raise ValueError("Training features are unavailable at issuance")
-        if (train["actual_available_at"] > first_issuance).any():
-            raise ValueError("training actuals are unavailable at issuance")
-        if (
-            not pd.api.types.is_numeric_dtype(train[target])
-            or not np.isfinite(train[target].to_numpy(dtype=float)).all()
-        ):
-            raise ValueError("Training actuals must be finite numeric values")
+        _validate_training_block(train, first_issuance, target)
         model.fit(train[columns], train[target])
     else:
         history_end = _timestamp(initial_model_history_end, "initial_model_history_end")
@@ -366,7 +481,12 @@ def run_backtest(
 
     log = build_forecast_log(pd.DataFrame(columns=INPUT_COLUMNS))
     availability = frame.set_index("timestamp")["actual_available_at"]
-    for window, block in zip(windows, blocks, strict=True):
+    # Refits rebind `model`, so keep the initial fit for `model_output_path`:
+    # that artifact identifies `model_version`, not whichever model fit last.
+    initial_model = model
+    active_version = model_version
+    refit_count = 0
+    for index, (window, block) in enumerate(zip(windows, blocks, strict=True)):
         issuance = window.issuance
         if policy_hook is not None:
             known = log["timestamp"].map(availability) <= issuance
@@ -375,7 +495,30 @@ def run_backtest(
             if not isinstance(decision, bool):
                 raise ValueError("policy_hook must return a bool retraining decision")
             if decision:
-                raise NotImplementedError("Retraining execution is deferred to Epic 7")
+                if refit_dir is None:
+                    raise ValueError(
+                        "Retraining requires refit_model_dir or model_output_path"
+                    )
+                refit_count += 1
+                active_version = f"{model_version}_refit_{refit_count:03d}"
+                train_block = refit_blocks[index]
+                model = XGBoostSpreadModel.from_config(config["model"])
+                model.fit(train_block[columns], train_block[target])
+                _save_model(
+                    model,
+                    Path(refit_dir) / f"{active_version}.json",
+                    exclusive=day_ahead,
+                )
+                if refit_logger is not None:
+                    refit_logger(
+                        {
+                            "timestamp": issuance.isoformat(),
+                            "strategy": strategy,
+                            "training_window_start": window.train.start.isoformat(),
+                            "training_window_end": window.train.end.isoformat(),
+                            "model_version": active_version,
+                        }
+                    )
         records = pd.DataFrame(
             {
                 "timestamp": block["timestamp"].to_numpy(),
@@ -383,7 +526,7 @@ def run_backtest(
                 "prediction": model.predict(block[columns]),
                 "actual": block[target].to_numpy(),
                 "strategy": strategy,
-                "model_version": model_version,
+                "model_version": active_version,
             }
         )
         current = build_forecast_log(records)
@@ -391,12 +534,7 @@ def run_backtest(
 
     if day_ahead:
         if model_output_path is not None:
-            model_path = Path(model_output_path)
-            model_path.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(dir=model_path.parent) as temporary:
-                staged = Path(temporary) / "model.json"
-                model.save(staged)
-                os.link(staged, model_path)  # Atomic, fails if destination exists.
+            _save_model(initial_model, Path(model_output_path), exclusive=True)
         forecast_path.parent.mkdir(parents=True, exist_ok=True)
         with forecast_path.open("xb") as handle:
             if forecast_path.suffix.lower() == ".parquet":
@@ -405,6 +543,6 @@ def run_backtest(
                 handle.write(log.to_csv(index=False).encode("utf-8"))
     else:
         if model_output_path is not None:
-            model.save(Path(model_output_path))
+            _save_model(initial_model, Path(model_output_path), exclusive=False)
         write_forecast_log(log, forecast_path)
     return log

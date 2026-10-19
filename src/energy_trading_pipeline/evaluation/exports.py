@@ -262,9 +262,17 @@ def export_dashboard_artifacts(
 				raise ValueError(
 					f"Missing model version/type in run metadata: {path}"
 				) from exc
-			if not isinstance(version, str) or not version.strip():
-				raise ValueError(f"Invalid model_version in run metadata: {path}")
-			models[version] = {"model_version": version, "model_type": model_type}
+			# A backtest that refit records every version it forecast under,
+			# so lineage reaches the dashboard, not just the initial model.
+			recorded = metadata.get("model_versions") or [version]
+			if not isinstance(recorded, list) or version not in recorded:
+				raise ValueError(
+					f"model_versions must list model_version in run metadata: {path}"
+				)
+			for entry in recorded:
+				if not isinstance(entry, str) or not entry.strip():
+					raise ValueError(f"Invalid model_version in run metadata: {path}")
+				models[entry] = {"model_version": entry, "model_type": model_type}
 		model_index = {"models": models}
 	return write_dashboard_exports(
 		read_forecast_log(forecasts_path),
