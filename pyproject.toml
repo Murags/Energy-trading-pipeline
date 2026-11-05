@@ -22,6 +22,9 @@ dependencies = [
 [project.optional-dependencies]
 dashboard = [
     "streamlit>=1.32",
+    # Native filesystem events; without it Streamlit falls back to polling and
+    # edits to the dashboard modules are slow to trigger a rerun.
+    "watchdog>=4.0",
 ]
 test = [
     "pytest>=8.0",

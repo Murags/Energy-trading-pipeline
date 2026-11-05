@@ -7,7 +7,8 @@ model lifecycle, so policies stay side-effect free and interchangeable.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from typing import Any
 
 import pandas as pd
 
@@ -63,6 +64,45 @@ class RetrainingPolicy(ABC):
     def as_policy_hook(self) -> Callable[[pd.Timestamp, pd.DataFrame], bool]:
         """Return a callable matching the backtest runner's policy hook signature."""
         return self.should_retrain
+
+    def state(self) -> dict[str, Any]:
+        """Serialize decision state so a later process resumes the same schedule.
+
+        A daily job runs as a fresh process, so the decision sequence must carry
+        across runs explicitly rather than living only in memory. Timestamps are
+        ISO-8601 UTC strings; ``None`` means no decision has been made yet.
+        """
+        last = self._last_decision_timestamp
+        return {
+            "strategy": self.strategy,
+            "last_decision_timestamp": None if last is None else last.isoformat(),
+        }
+
+    def restore(self, state: Mapping[str, Any]) -> None:
+        """Resume from state produced by ``state()`` for this same strategy."""
+        if not isinstance(state, Mapping):
+            raise ValueError("Policy state must be a mapping")
+        recorded = state.get("strategy")
+        if recorded != self.strategy:
+            raise ValueError(
+                f"Policy state is for {recorded!r}, not {self.strategy!r}"
+            )
+        self._last_decision_timestamp = self._restore_timestamp(
+            state.get("last_decision_timestamp"), "last_decision_timestamp"
+        )
+
+    @staticmethod
+    def _restore_timestamp(value: Any, name: str) -> pd.Timestamp | None:
+        """Parse an optional aware timestamp from serialized policy state."""
+        if value is None:
+            return None
+        try:
+            timestamp = pd.Timestamp(value)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"{name} must be a valid timestamp") from exc
+        if pd.isna(timestamp) or timestamp.tzinfo is None:
+            raise ValueError(f"{name} must be timezone-aware")
+        return timestamp.tz_convert("UTC").as_unit("ns")
 
     @abstractmethod
     def _decide(

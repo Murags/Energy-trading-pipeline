@@ -1,0 +1,70 @@
+# Day-ahead variant using only the PV+wind forecast (SMARD filter 5097).
+# Filter 122 is excluded: it is not reliably published by the 18:00 issuance
+# and has permanent 24-hour holes (e.g. delivery day 2026-10-23).
+data:
+  target_column: spread
+  timestamp_column: timestamp
+  input_format: parquet
+dates:
+  start_date: '2022-01-01'
+  end_date: '2026-10-21'
+features:
+  lag_hours:
+  - 48
+  - 168
+  rolling_window_hours:
+  - 24
+  rolling_shift_hours: 48
+  calendar_timezone: Europe/Berlin
+  calendar_features:
+  - hour
+  - day_of_week
+  - month
+  - is_weekend
+  weather_columns: []
+  grid_columns: []
+  day_ahead_forecast_columns:
+  - forecast_pv_wind_de
+model:
+  type: xgboost
+  target_column: spread
+backtest:
+  mode: day_ahead
+  issue_hour: 18
+  issue_timezone: Europe/Berlin
+  evaluation_start_date: '2024-01-01'
+  evaluation_end_date: '2024-12-31'
+  train_window_days: 90
+  validation_window_days: 7
+  forecast_horizon_hours: 24
+  feature_columns:
+  - spread_lag_48
+  - spread_lag_168
+  - price_de_lag_48
+  - price_de_lag_168
+  - price_fr_lag_48
+  - price_fr_lag_168
+  - spread_rolling_mean_24
+  - spread_rolling_std_24
+  - price_de_rolling_mean_24
+  - price_de_rolling_std_24
+  - price_fr_rolling_mean_24
+  - price_fr_rolling_std_24
+  - hour
+  - day_of_week
+  - month
+  - is_weekend
+  - forecast_pv_wind_de
+retraining:
+  strategy: no_retraining
+  fixed_schedule_interval_days: 7
+  rolling_rmse_threshold: 25.0
+  rolling_rmse_window_days: 7
+  actual_availability_lag_hours: 1
+evaluation:
+  metrics:
+  - rmse
+  - mae
+artifacts:
+  run_prefix: run
+  output_format: parquet

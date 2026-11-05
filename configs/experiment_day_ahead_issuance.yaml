@@ -1,0 +1,82 @@
+# Issuance-relative day-ahead variant: market-state features summarise the
+# price history usable at the 10:00 issuance, instead of per-delivery-hour lags
+# long enough for the last hour of the block.
+data:
+  target_column: spread
+  timestamp_column: timestamp
+  input_format: parquet
+dates:
+  start_date: '2022-01-01'
+  end_date: '2025-12-31'
+features:
+  lag_hours:
+  - 48
+  - 168
+  rolling_window_hours:
+  - 24
+  rolling_shift_hours: 48
+  calendar_timezone: Europe/Berlin
+  calendar_features:
+  - hour
+  - day_of_week
+  - month
+  - is_weekend
+  weather_columns: []
+  grid_columns: []
+  issuance_window_hours:
+  - 24
+  - 168
+model:
+  type: xgboost
+  target_column: spread
+backtest:
+  mode: day_ahead
+  issue_hour: 10
+  issue_timezone: Europe/Berlin
+  evaluation_start_date: '2024-01-01'
+  evaluation_end_date: '2024-12-31'
+  train_window_days: 90
+  validation_window_days: 7
+  forecast_horizon_hours: 24
+  feature_columns:
+  - spread_lag_48
+  - spread_lag_168
+  - price_de_lag_48
+  - price_de_lag_168
+  - price_fr_lag_48
+  - price_fr_lag_168
+  - spread_rolling_mean_24
+  - spread_rolling_std_24
+  - price_de_rolling_mean_24
+  - price_de_rolling_std_24
+  - price_fr_rolling_mean_24
+  - price_fr_rolling_std_24
+  - hour
+  - day_of_week
+  - month
+  - is_weekend
+  - spread_issuance_mean_24
+  - spread_issuance_std_24
+  - spread_issuance_mean_168
+  - spread_issuance_std_168
+  - price_de_issuance_mean_24
+  - price_de_issuance_std_24
+  - price_de_issuance_mean_168
+  - price_de_issuance_std_168
+  - price_fr_issuance_mean_24
+  - price_fr_issuance_std_24
+  - price_fr_issuance_mean_168
+  - price_fr_issuance_std_168
+  - spread_issuance_last
+  - price_de_issuance_last
+  - price_fr_issuance_last
+retraining:
+  strategy: no_retraining
+  actual_availability_lag_hours: 1
+evaluation:
+  metrics:
+  - rmse
+  - mae
+artifacts:
+  run_prefix: run
+  output_format: parquet

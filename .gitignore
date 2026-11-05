@@ -31,6 +31,7 @@ data/features/*.parquet
 data/features/*.metadata.yaml
 logs/runs/run_*/
 data/raw/smard/prices/run_*/
+data/raw/smard/forecast/run_*/
 data/raw/open_meteo/weather/run_*/
 data/processed/run_*/
 models/artifacts/model_*/

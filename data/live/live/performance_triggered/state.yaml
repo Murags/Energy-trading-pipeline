@@ -1,0 +1,65 @@
+strategy: performance_triggered
+model_version: model_20261102_170000
+last_issuance: '2026-11-02T17:00:00+00:00'
+last_delivery_date: '2026-11-03'
+retraining_count: 0
+feature_columns:
+- spread_lag_48
+- spread_lag_168
+- price_de_lag_48
+- price_de_lag_168
+- price_fr_lag_48
+- price_fr_lag_168
+- spread_rolling_mean_24
+- spread_rolling_std_24
+- price_de_rolling_mean_24
+- price_de_rolling_std_24
+- price_fr_rolling_mean_24
+- price_fr_rolling_std_24
+- hour
+- day_of_week
+- month
+- is_weekend
+- forecast_pv_wind_de
+model_parameters:
+  n_estimators: 100
+  max_depth: 4
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+  objective: reg:squarederror
+availability_contract:
+  mode: day_ahead
+  issue_hour: 18
+  issue_timezone: Europe/Berlin
+  price_usable_after: delivery_end_timestamp_plus_1_hour
+  features:
+    lag_hours:
+    - 48
+    - 168
+    rolling_window_hours:
+    - 24
+    rolling_shift_hours: 48
+    calendar_timezone: Europe/Berlin
+    calendar_features:
+    - hour
+    - day_of_week
+    - month
+    - is_weekend
+    weather_columns: []
+    grid_columns: []
+    day_ahead_forecast_columns:
+    - forecast_pv_wind_de
+  limitations: Historical snapshot prices may include later revisions; publication
+    vintages are not reconstructed. Usable-after is deliberately delayed until delivery
+    end, not an observed publication time. ERA5 and grid predictors are excluded.
+  day_ahead_forecast_basis: Day-ahead TSO generation forecast for the following day
+    under Regulation (EU) 543/2013 Art. 14(1)(c)/(d), published by 18:00 local time
+    on the preceding day and not retrospectively updated, so the stored value is the
+    original day-ahead vintage available at issuance.
+  day_ahead_forecast_deadline_hour: 18
+policy:
+  strategy: performance_triggered
+  last_decision_timestamp: '2026-11-02T17:00:00+00:00'
+updated_at: '2026-11-03T15:37:53.640075+00:00'

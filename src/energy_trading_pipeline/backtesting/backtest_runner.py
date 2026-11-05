@@ -233,7 +233,11 @@ def run_configured_backtest(
             metadata["issuance_times"] = [
                 window.issuance.isoformat() for window in windows
             ]
-            metadata["evaluation_purpose"] = "engineering_smoke_not_final_evaluation"
+            metadata["evaluation_purpose"] = (
+                "perfect_foresight_bound_not_operational"
+                if config["features"].get("perfect_foresight_weather")
+                else "engineering_smoke_not_final_evaluation"
+            )
         write_run_metadata(run_dir, metadata)
         _write_backtest_event(
             log_path, context, "backtest_completed", forecast_rows=len(forecasts)
@@ -447,8 +451,16 @@ def run_backtest(
     first_issuance = windows[0].issuance
     # Preflight the entire evaluation before training or writing any artifacts.
     blocks = [_select_hours(frame, window.forecast) for window in windows]
+    # A declared perfect-foresight bound knowingly uses predictors that are not
+    # held at issuance; every other run must still refuse them.
+    perfect_foresight = bool(
+        config.get("features", {}).get("perfect_foresight_weather", False)
+    )
     for window, block in zip(windows, blocks, strict=True):
-        if (block["feature_available_at"] > window.issuance).any():
+        if (
+            not perfect_foresight
+            and (block["feature_available_at"] > window.issuance).any()
+        ):
             raise ValueError("Forecast features are unavailable at issuance")
     # A policy may refit at any issuance, so every candidate window is checked
     # up front rather than failing part-way through a run.

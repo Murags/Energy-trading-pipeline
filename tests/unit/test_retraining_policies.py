@@ -515,3 +515,78 @@ def test_performance_triggered_rejects_invalid_availability_lag(value):
         PerformanceTriggeredPolicy(
             threshold=1.0, actual_availability_lag_hours=value
         )
+
+
+def test_policy_state_round_trips_the_decision_guard():
+    """A fresh process must not accept a decision earlier than the last one."""
+    policy = NoRetrainingPolicy()
+    history = make_history([])
+    policy.should_retrain(pd.Timestamp("2026-11-03T17:00:00Z"), history)
+
+    resumed = NoRetrainingPolicy()
+    resumed.restore(policy.state())
+
+    with pytest.raises(ValueError, match="must not move backwards"):
+        resumed.should_retrain(pd.Timestamp("2026-11-02T17:00:00Z"), history)
+
+
+def test_fixed_schedule_resumes_its_interval_across_processes():
+    history = make_history([], strategy="fixed_schedule")
+    first = FixedSchedulePolicy(interval_days=7)
+    start = pd.Timestamp("2026-10-01T16:00:00Z")
+    assert not first.should_retrain(start, history)  # anchors the schedule
+
+    # A new process resumes, then steps day by day to the interval boundary.
+    resumed = FixedSchedulePolicy(interval_days=7)
+    resumed.restore(first.state())
+    decisions = [
+        resumed.should_retrain(start + pd.Timedelta(days=d), history)
+        for d in range(1, 8)
+    ]
+
+    assert decisions == [False] * 6 + [True]
+    assert resumed.state()["schedule_timestamp"] == (
+        start + pd.Timedelta(days=7)
+    ).isoformat()
+
+
+def test_fixed_schedule_state_without_restore_would_restart_the_schedule():
+    """Guards the bug the state API exists to prevent."""
+    history = make_history([], strategy="fixed_schedule")
+    start = pd.Timestamp("2026-10-01T16:00:00Z")
+    first = FixedSchedulePolicy(interval_days=7)
+    first.should_retrain(start, history)
+
+    forgetful = FixedSchedulePolicy(interval_days=7)
+    assert not forgetful.should_retrain(start + pd.Timedelta(days=7), history)
+
+
+def test_policy_state_rejects_another_strategy_or_interval():
+    policy = FixedSchedulePolicy(interval_days=7)
+    policy.should_retrain(pd.Timestamp("2026-10-01T16:00:00Z"), make_history([], strategy="fixed_schedule"))
+    state = policy.state()
+
+    with pytest.raises(ValueError, match="not 'no_retraining'"):
+        NoRetrainingPolicy().restore(state)
+    with pytest.raises(ValueError, match="interval_days"):
+        FixedSchedulePolicy(interval_days=14).restore(state)
+
+
+def test_performance_triggered_state_round_trips():
+    policy = PerformanceTriggeredPolicy(threshold=0.5, min_periods=1)
+    history = make_history(["2026-10-01T12:00:00Z"], strategy="performance_triggered")
+    policy.should_retrain(pd.Timestamp("2026-10-02T16:00:00Z"), history)
+
+    resumed = PerformanceTriggeredPolicy(threshold=0.5, min_periods=1)
+    resumed.restore(policy.state())
+
+    assert resumed.state() == policy.state()
+    assert resumed.should_retrain(pd.Timestamp("2026-10-03T16:00:00Z"), history)
+
+
+@pytest.mark.parametrize("value", ["not-a-time", "2026-10-01T16:00:00", 5])
+def test_restoring_an_invalid_timestamp_fails_clearly(value):
+    with pytest.raises(ValueError, match="last_decision_timestamp"):
+        NoRetrainingPolicy().restore(
+            {"strategy": "no_retraining", "last_decision_timestamp": value}
+        )
