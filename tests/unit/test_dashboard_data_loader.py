@@ -1,6 +1,7 @@
 """Read-only dashboard loading checks using small exported Parquet fixtures."""
 
 import json
+from io import BytesIO
 import os
 from pathlib import Path
 import subprocess
@@ -15,6 +16,38 @@ from energy_trading_pipeline.dashboard.data_loader import (
     DashboardArtifactError,
     load_dashboard_artifacts,
 )
+
+
+class MissingObject(Exception):
+    """Minimal botocore-shaped not-found error for fake S3 reads."""
+
+    def __init__(self, key: str) -> None:
+        self.response = {"Error": {"Code": "NoSuchKey", "Message": key}}
+        super().__init__(key)
+
+
+class FakeS3Client:
+    """Serve in-memory objects and record any attempted writes."""
+
+    def __init__(self, objects: dict[str, bytes]) -> None:
+        self.objects = objects
+        self.reads: list[str] = []
+        self.writes: list[str] = []
+
+    def head_object(self, *, Bucket: str, Key: str) -> dict:
+        if Key not in self.objects:
+            raise MissingObject(Key)
+        return {}
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict:
+        if Key not in self.objects:
+            raise MissingObject(Key)
+        self.reads.append(Key)
+        return {"Body": BytesIO(self.objects[Key])}
+
+    def put_object(self, **kwargs) -> None:
+        self.writes.append(kwargs["Key"])
+        raise AssertionError("The dashboard must not write backtest exports")
 
 
 @pytest.fixture
@@ -63,6 +96,16 @@ def dashboard_exports(tmp_path, dashboard_frames):
     for name, frame in dashboard_frames.items():
         frame.to_parquet(exports_dir / f"{name}.parquet", index=False)
     return exports_dir
+
+
+@pytest.fixture
+def s3_dashboard_objects(dashboard_frames):
+    objects = {}
+    for name, frame in dashboard_frames.items():
+        buffer = BytesIO()
+        frame.to_parquet(buffer, index=False)
+        objects[f"demo/reports/dashboard_exports/{name}.parquet"] = buffer.getvalue()
+    return objects
 
 
 @pytest.fixture
@@ -190,6 +233,34 @@ def test_loads_default_exports_without_changing_files(
     for name, expected in dashboard_frames.items():
         assert_frame_equal(loaded[name], expected)
     assert {path: path.read_bytes() for path in dashboard_exports.iterdir()} == before
+
+
+def test_loads_s3_exports_without_writes(s3_dashboard_objects, dashboard_frames):
+    client = FakeS3Client(s3_dashboard_objects)
+
+    loaded = load_dashboard_artifacts(
+        "s3://artifact-bucket/demo/reports/dashboard_exports", client=client
+    )
+
+    assert set(loaded) == set(dashboard_frames)
+    for name, expected in dashboard_frames.items():
+        assert_frame_equal(loaded[name], expected)
+    assert len(client.reads) == 4
+    assert not client.writes
+
+
+def test_missing_s3_export_names_full_uri(s3_dashboard_objects):
+    missing = "demo/reports/dashboard_exports/metrics.parquet"
+    del s3_dashboard_objects[missing]
+
+    with pytest.raises(DashboardArtifactError) as caught:
+        load_dashboard_artifacts(
+            "s3://artifact-bucket/demo/reports/dashboard_exports",
+            client=FakeS3Client(s3_dashboard_objects),
+        )
+
+    assert f"s3://artifact-bucket/{missing}" in str(caught.value)
+    assert "Upload artifacts" in str(caught.value)
 
 
 @pytest.mark.parametrize(

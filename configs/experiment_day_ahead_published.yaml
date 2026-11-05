@@ -60,6 +60,9 @@ backtest:
   - forecast_generation_total_de
 retraining:
   strategy: no_retraining
+  fixed_schedule_interval_days: 7
+  rolling_rmse_threshold: 25.0
+  rolling_rmse_window_days: 7
   actual_availability_lag_hours: 1
 evaluation:
   metrics:

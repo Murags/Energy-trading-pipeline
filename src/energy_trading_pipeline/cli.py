@@ -7,11 +7,14 @@ from pathlib import Path
 import yaml
 
 from energy_trading_pipeline.backtesting.backtest_runner import run_configured_backtest
+from energy_trading_pipeline.backtesting.forecast_log import STRATEGIES
 from energy_trading_pipeline.config.loader import load_config
 from energy_trading_pipeline.config.paths import get_default_base_dir, resolve_path
 from energy_trading_pipeline.evaluation.exports import export_dashboard_artifacts
 from energy_trading_pipeline.models.trainer import train_baseline
 from energy_trading_pipeline.features.availability import prepare_configured_day_ahead
+from energy_trading_pipeline.forecasting.daily import run_daily_forecast
+from energy_trading_pipeline.forecasting.store import build_store
 from energy_trading_pipeline.utils.io import create_run_directory, write_run_metadata
 from energy_trading_pipeline.utils.time import generate_run_id
 
@@ -25,8 +28,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["train", "backtest", "export-dashboard", "prepare-day-ahead"],
-        help="Train, backtest, or export saved results; omit to inspect config.",
+        choices=[
+            "train",
+            "backtest",
+            "export-dashboard",
+            "prepare-day-ahead",
+            "forecast-next-day",
+        ],
+        help="Train, backtest, forecast, or export saved results; omit to inspect config.",
     )
     parser.add_argument(
         "--config",
@@ -50,6 +59,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     model_sources = parser.add_mutually_exclusive_group()
     model_sources.add_argument(
         "--model-index", type=Path, help="Saved model registry YAML index."
+    )
+    parser.add_argument(
+        "--store",
+        help="Artifact store for live forecasting: a directory or s3://bucket/prefix.",
+    )
+    parser.add_argument(
+        "--strategy",
+        action="append",
+        choices=sorted(STRATEGIES),
+        help="Strategy to issue; repeat for several. Defaults to all three.",
     )
     model_sources.add_argument(
         "--run-metadata",
@@ -76,6 +95,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         )
     ):
         parser.error("Saved artifact flags require the export-dashboard command")
+    if args.command == "forecast-next-day" and not args.store:
+        parser.error("forecast-next-day requires --store")
+    if args.store is not None and args.command != "forecast-next-day":
+        parser.error("--store requires the forecast-next-day command")
+    if args.strategy is not None and args.command != "forecast-next-day":
+        parser.error("--strategy requires the forecast-next-day command")
     return args
 
 
@@ -105,6 +130,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Dashboard exports written to: {reports_dir / 'dashboard_exports'}")
             for name, path in paths.items():
                 print(f"  {name}: {path}")
+            return 0
+        if args.command == "forecast-next-day":
+            summary = run_daily_forecast(
+                build_store(args.store),
+                config,
+                strategies=tuple(args.strategy or sorted(STRATEGIES)),
+            )
+            print(f"Issued at: {summary['issuance']}")
+            print(f"Delivery day: {summary['delivery_date']}")
+            for row in summary["strategies"]:
+                state = "refit" if row["retrained"] else "reused"
+                note = " (reissued)" if row["reissued"] else ""
+                print(
+                    f"  {row['strategy']:22s} {row['hours']:2d}h  "
+                    f"{state} {row['model_version']}{note}"
+                )
             return 0
         if args.command == "prepare-day-ahead":
             metadata = prepare_configured_day_ahead(

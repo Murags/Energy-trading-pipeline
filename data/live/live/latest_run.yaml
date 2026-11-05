@@ -1,0 +1,30 @@
+ran_at: '2026-11-03T15:37:53.640075+00:00'
+issuance: '2026-11-02T17:00:00+00:00'
+delivery_date: '2026-11-03'
+market_rows: 3743
+market_through: '2026-11-03T22:00:00+00:00'
+strategies:
+- strategy: fixed_schedule
+  delivery_date: '2026-11-03'
+  issuance: '2026-11-02T17:00:00+00:00'
+  hours: 24
+  model_version: model_20261102_170000
+  retrained: true
+  reissued: false
+  retraining_count: 0
+- strategy: no_retraining
+  delivery_date: '2026-11-03'
+  issuance: '2026-11-02T17:00:00+00:00'
+  hours: 24
+  model_version: model_20261102_170000
+  retrained: true
+  reissued: false
+  retraining_count: 0
+- strategy: performance_triggered
+  delivery_date: '2026-11-03'
+  issuance: '2026-11-02T17:00:00+00:00'
+  hours: 24
+  model_version: model_20261102_170000
+  retrained: true
+  reissued: false
+  retraining_count: 0

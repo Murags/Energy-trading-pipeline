@@ -1,64 +1,171 @@
-# Optional S3 Artifact Storage
+# Optional AWS Daily Forecast Stack
 
-This Terraform root demonstrates optional artifact storage for Story 11.1.
-No AWS resources or credentials are required for local pipeline runs, fixture
-tests, backtests, or the dashboard. Local artifacts remain the source of truth.
-Nothing in the Python CLI, Docker configuration, or CI invokes Terraform.
+This Terraform root defines the optional AWS demonstration environment.
+No AWS resources or credentials are required for local pipeline runs, tests,
+backtests, or the local dashboard. Terraform is never invoked by the Python pipeline.
 
-The skeleton creates one S3 bucket and three bucket-scoped security controls:
-all public access is blocked, default encryption uses S3-managed AES256 keys,
-and bucket-owner-enforced ownership disables ACLs. It does not create IAM roles,
-KMS keys, remote state storage, cloud compute, objects, or upload automation.
-Artifact mirroring is a separate story; applying this skeleton leaves an empty
-bucket and does not upload or change local files.
+The stack contains:
 
-## Inputs and Outputs
+- a private, encrypted, versioned S3 artifact bucket;
+- immutable, scan-on-push ECR repositories for the forecast and dashboard;
+- a container-image Lambda with least-privilege S3 and CloudWatch access;
+- an EventBridge Scheduler trigger at **18:15 `Europe/Berlin`** (DST-aware);
+- explicit 14-day CloudWatch log groups;
+- an ECS cluster and Fargate task definition for a manually started dashboard;
+- a small public VPC with dashboard ingress restricted to one configured CIDR;
+- forecasted-80% and actual-100% monthly AWS Budget email notifications.
 
-Terraform 1.7 or newer (below 2.0) is required. The AWS provider uses version 6.x;
-the committed `.terraform.lock.hcl` pins the selected version and checksums.
-Terraform is a separate, optional tool, not a Python or local-run dependency.
+There is no ECS service, load balancer, NAT gateway, database, or always-on
+compute. The dashboard task is billed only while someone explicitly runs it.
+Terraform does not start a dashboard task.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `bucket_name` | Required | Globally unique S3 bucket name. |
-| `aws_region` | `eu-central-1` | Region for the optional bucket. |
-| `tags` | `{ project = "energy_trading_pipeline" }` | Bucket tags. |
+## Required Inputs
 
-The bucket naming convention is intentionally narrower than S3's full rules:
-3-63 lowercase letters or digits, optionally separated by single hyphens.
-Dots, underscores, consecutive hyphens, IP-address names, leading/trailing
-hyphens, and AWS-reserved prefixes/suffixes are rejected. Terraform cannot check
-global name availability without AWS; choose your own unique name.
+Use an ignored `terraform.tfvars` file or `TF_VAR_...` environment variables.
+Never commit personal email addresses, account details, or Terraform state.
 
-Outputs are `bucket_name`, `bucket_arn`, `bucket_uri`, `aws_region`, and
-`artifact_prefixes`. The last output maps local directories to S3 key prefixes;
-it describes the layout but does not create folder objects.
+```hcl
+bucket_name              = "energy-pipeline-artifacts-unique-suffix"
+budget_notification_email = "researcher@example.com"
+dashboard_allowed_cidr    = "198.51.100.10/32"
+budget_limit_usd          = 10
+```
 
-## Mirrored Artifact Layout
+`dashboard_allowed_cidr` should normally be the reviewer's current public IPv4
+address with `/32`. `0.0.0.0/0` is rejected. The budget covers the whole AWS
+account, not only tagged resources, so unrelated account usage can trigger it.
+Budget notifications require email confirmation when AWS requests it.
 
-Keep each artifact's repository-relative path as its S3 object key. Append it
-to `bucket_uri`; do not flatten nested paths or rename run/model identifiers.
-The table describes the default local layout. If local directories are
-configured elsewhere, preserve these canonical destination prefixes rather
-than using an absolute host path as an object key.
+Important optional variables include `aws_region` (`eu-central-1`),
+`lambda_memory_mb` (4096), `lambda_timeout_seconds` (900),
+`log_retention_days` (14), and the two immutable image tags. The schedule is
+enabled by default and can be staged disabled with `schedule_enabled = false`.
+
+## Two-Stage Deployment
+
+Lambda validates that its ECR image exists when the function is created. Since
+this stack also creates the ECR repositories, a clean account requires two
+separately reviewed plans. This avoids a partial first apply.
+
+### 1. Bootstrap storage and repositories
+
+Leave the default:
+
+```hcl
+deploy_workloads = false
+```
+
+Then initialize, validate, and save a bootstrap plan:
+
+```sh
+terraform -chdir=infrastructure/terraform init -input=false
+terraform -chdir=infrastructure/terraform fmt -check
+terraform -chdir=infrastructure/terraform validate
+terraform -chdir=infrastructure/terraform plan -out=bootstrap.tfplan
+terraform -chdir=infrastructure/terraform show bootstrap.tfplan
+```
+
+Review costs and resources before any apply. Applying requires explicit human
+approval:
+
+```sh
+terraform -chdir=infrastructure/terraform apply bootstrap.tfplan
+```
+
+The bootstrap creates the ECR repositories and supporting non-workload
+resources, but no Lambda, schedule, or dashboard task definition.
+
+### 2. Push images and enable workloads
+
+After an approved bootstrap apply, authenticate Docker and use immutable tags,
+for example the short Git commit SHA. Build for `linux/amd64`, matching Lambda
+and Fargate:
+
+```sh
+account_id=$(aws sts get-caller-identity --query Account --output text)
+region=$(terraform -chdir=infrastructure/terraform output -raw aws_region)
+registry="$account_id.dkr.ecr.$region.amazonaws.com"
+aws ecr get-login-password --region "$region" | docker login --username AWS --password-stdin "$registry"
+
+tag=$(git rev-parse --short HEAD)
+forecast_repo=$(terraform -chdir=infrastructure/terraform output -raw forecast_repository_url)
+dashboard_repo=$(terraform -chdir=infrastructure/terraform output -raw dashboard_repository_url)
+
+docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+  -f deploy/lambda/Dockerfile -t "$forecast_repo:$tag" --push .
+docker buildx build --platform linux/amd64 -f deploy/dashboard/Dockerfile -t "$dashboard_repo:$tag" --push .
+```
+
+Set `deploy_workloads = true`, set both image tags to that immutable tag, and
+create a second reviewed plan:
+
+```hcl
+deploy_workloads    = true
+lambda_image_tag    = "<git-sha>"
+dashboard_image_tag = "<git-sha>"
+```
+
+```sh
+terraform -chdir=infrastructure/terraform plan -out=workloads.tfplan
+terraform -chdir=infrastructure/terraform show workloads.tfplan
+```
+
+Do not apply without explicit approval. The schedule uses
+`cron(15 18 * * ? *)` with `Europe/Berlin`; it therefore remains at 18:15 local
+time across daylight-saving changes.
+
+## On-Demand Dashboard
+
+After the dashboard S3/Live-tab implementation and an approved workload apply,
+start one task manually. No service keeps it alive or restarts it:
+
+```sh
+cluster=$(terraform -chdir=infrastructure/terraform output -raw dashboard_cluster_name)
+task_definition=$(terraform -chdir=infrastructure/terraform output -raw dashboard_task_definition_arn)
+subnet=$(terraform -chdir=infrastructure/terraform output -raw dashboard_subnet_id)
+security_group=$(terraform -chdir=infrastructure/terraform output -raw dashboard_security_group_id)
+
+aws ecs run-task --cluster "$cluster" --task-definition "$task_definition" \
+  --launch-type FARGATE \
+  --network-configuration "awsvpcConfiguration={subnets=[$subnet],securityGroups=[$security_group],assignPublicIp=ENABLED}"
+```
+
+Read the task's public IP from its attached ENI and open port 8501. Stop the
+task immediately after review to stop Fargate and public-IPv4 charges:
+
+```sh
+aws ecs list-tasks --cluster "$cluster"
+aws ecs stop-task --cluster "$cluster" --task <task-arn>
+```
+
+Keeping the dashboard running between sessions requires explicit approval.
+The prototype endpoint is CIDR-restricted but does not terminate TLS or provide
+application authentication. Use it only from the configured trusted IP for a
+short review session; do not expose sensitive data or broaden the CIDR.
+
+The task derives its read-only historical export location as
+`$ETP_STORE/reports/dashboard_exports`. Upload all four files listed below before
+starting the task; the Backtest tab never runs a backtest or writes artifacts.
+The task also sets `ARROW_DEFAULT_MEMORY_POOL=system` to avoid native allocator
+crashes while filtering larger Parquet exports.
+
+## Artifact Layout
+
+Repository-relative paths remain the S3 object keys. The live forecast uses
+`market/` and `live/<strategy>/`; existing mirrored outputs retain these paths:
 
 | Local directory | S3 prefix | Contents |
 | --- | --- | --- |
-| `data/raw/` | `data/raw/` | Optional cached source data, including source subdirectories. |
-| `data/processed/` | `data/processed/` | Aligned/cleaned datasets and processing-run metadata. |
-| `data/features/` | `data/features/` | Feature dataset and metadata. |
-| `models/` | `models/` | `artifacts/model_YYYYMMDD_HHMMSS/` and `registry/`. |
-| `logs/` | `logs/` | Run metadata, forecasts, actuals, errors, and retraining logs. |
-| `reports/tables/` | `reports/tables/` | Metrics, comparisons, and saved result tables. |
-| `reports/figures/` | `reports/figures/` | Forecast, rolling RMSE, event, and comparison plots. |
-| `reports/dashboard_exports/` | `reports/dashboard_exports/` | The four artifact-only dashboard exports. |
+| `data/raw/` | `data/raw/` | Optional cached source data. |
+| `data/processed/` | `data/processed/` | Processed datasets and metadata. |
+| `data/features/` | `data/features/` | Feature datasets and metadata. |
+| `models/` | `models/` | Versioned models and registry artifacts. |
+| `logs/` | `logs/` | Run, forecast, error, and retraining logs. |
+| `reports/tables/` | `reports/tables/` | Evaluation tables. |
+| `reports/figures/` | `reports/figures/` | Evaluation figures. |
+| `reports/dashboard_exports/` | `reports/dashboard_exports/` | Dashboard snapshots. |
 
-For example, `models/artifacts/model_20260911_153514/model.json` maps to
-`s3://<bucket_name>/models/artifacts/model_20260911_153514/model.json`.
-`logs/runs/run_20260911_183514/` keeps the same nested run prefix. Model/run
-examples illustrate naming only; mirror only artifacts that actually exist.
-
-Story 8.4's exports retain these exact keys:
+The existing dashboard exports keep their exact keys:
 
 ```text
 reports/dashboard_exports/forecasts.parquet
@@ -67,13 +174,9 @@ reports/dashboard_exports/retraining_events.parquet
 reports/dashboard_exports/model_versions.parquet
 ```
 
-The dashboard continues to read local exported artifacts, not this bucket.
-Do not mirror credentials, Terraform state/plans, local environment files,
-or datasets whose source terms do not permit storage in S3.
+## Credential-Free Verification
 
-## Verify Without AWS
-
-Run these commands from the repository root:
+Initialization downloads the AWS provider but does not create resources:
 
 ```sh
 terraform -chdir=infrastructure/terraform init -backend=false -input=false
@@ -82,82 +185,55 @@ terraform fmt -check tests/unit/terraform_s3.tftest.hcl
 terraform -chdir=infrastructure/terraform validate
 ```
 
-Initialization downloads the provider from the Terraform registry and needs
-network access, but not AWS credentials. Validation does not provision anything.
-After initialization, the native tests reuse that provider locally and make no
-AWS calls. Terraform requires tests inside its configuration root, so stage
-the repository's unit tests and configuration in a temporary test root:
+The native test uses a mock AWS provider. Terraform expects tests beneath the
+configuration root, so copy the configuration and test into a temporary folder:
 
 ```sh
 test_root=$(mktemp -d)
-cp infrastructure/terraform/main.tf infrastructure/terraform/variables.tf \
-  infrastructure/terraform/outputs.tf infrastructure/terraform/README.md \
+cp infrastructure/terraform/*.tf infrastructure/terraform/README.md \
   infrastructure/terraform/.terraform.lock.hcl "$test_root/"
 mkdir "$test_root/tests"
 cp tests/unit/terraform_s3.tftest.hcl "$test_root/tests/"
-terraform -chdir="$test_root" init -backend=false -input=false \
-  -lockfile=readonly \
+terraform -chdir="$test_root" init -backend=false -input=false -lockfile=readonly \
   -plugin-dir="$PWD/infrastructure/terraform/.terraform/providers"
 terraform -chdir="$test_root" test
 ```
 
-The test file explicitly mocks the AWS provider, including its `apply` test;
-no real bucket is created or deleted. Tests cover security settings, outputs,
-invalid bucket names, artifact mappings, and this usage documentation. The
-temporary directory can be removed after testing.
+The mock tests require no AWS credentials and create nothing. The default Python
+suite also remains offline: `uv run pytest -q`.
 
-The existing offline regression command remains `uv run pytest -q`. Pytest
-does not execute `.tftest.hcl` files. CI remains unchanged and requires neither
-Terraform, AWS credentials, provider downloads, nor cloud resources.
+## Security and Cost Boundaries
 
-## Provision Only When Explicitly Needed
+- IAM roles use service-specific trust policies and bucket/prefix-scoped S3 access.
+- The artifact bucket blocks public access, disables ACLs, encrypts objects, and
+  enables versioning. `force_destroy = false` protects nonempty ECR repositories
+  and the S3 bucket.
+- Dashboard ingress rejects public `0.0.0.0/0`; outbound access is HTTPS only.
+- No secrets or AWS credentials enter an image, variable, or source file.
+- S3, ECR, and CloudWatch charge for stored bytes; Lambda and Scheduler charge
+  per use after applicable free tiers. Fargate CPU/memory and a public IPv4
+  address are charged only while a dashboard task runs.
+- AWS Budgets can itself incur a small charge after the account's free budget
+  allowance. A budget alerts but does not automatically stop resources.
+- There is no NAT gateway or load balancer, avoiding their hourly charges.
 
-Real `plan`, `apply`, and `destroy` commands contact AWS. They require an
-existing authenticated AWS profile/role and may incur S3 storage/request
-charges. Use your normal AWS credential chain; never put access keys in
-Terraform variables, source files, or Git. No IAM policies are provisioned here.
-
-Ask the account administrator for bucket-scoped permissions for the chosen
-bucket. Provisioning needs `s3:CreateBucket`, `s3:DeleteBucket`, `s3:ListBucket`,
-`s3:GetBucketLocation`, and `s3:GetBucketTagging`/`s3:PutBucketTagging`, plus
-read/write permissions for public-access blocking, encryption configuration,
-and ownership controls (`s3:GetBucketPublicAccessBlock`,
-`s3:PutBucketPublicAccessBlock`, `s3:GetEncryptionConfiguration`,
-`s3:PutEncryptionConfiguration`, `s3:GetBucketOwnershipControls`, and
-`s3:PutBucketOwnershipControls`). The provider may also need read permissions
-for other bucket configuration during refresh; scope those to this bucket
-rather than granting account-wide administrator access. Object upload/read
-permissions are not needed for this empty-bucket skeleton.
-
-Choose a globally unique name, replace the example profile/name below, and
-review the plan before applying:
-
-```sh
-export AWS_PROFILE="research-demo"
-export TF_VAR_bucket_name="energy-research-artifacts-your-unique-suffix"
-export TF_VAR_aws_region="eu-central-1"
-terraform -chdir=infrastructure/terraform plan -out=optional_s3.tfplan
-terraform -chdir=infrastructure/terraform apply optional_s3.tfplan
-terraform -chdir=infrastructure/terraform output
-```
-
-Expect only the bucket and its three security controls. Do not apply if the
-plan includes unrelated resources. Terraform uses local state by default;
-keep that state private and available for subsequent management and cleanup.
-Local provider working directories, state/backups, `.tfplan` files, `.tfvars`
-files, and crash logs are ignored by Git. Keep the provider lockfile committed.
+Terraform uses local state. Keep state and saved plans private and backed up;
+`.gitignore` excludes them. Empty versioned objects and ECR images before
+destroying because destructive deletion is intentionally disabled.
 
 ## Cleanup
 
+Always review the destroy plan with the same variables and state:
+
+First list and stop any dashboard task, then wait until ECS reports it stopped.
+Terraform cannot reliably delete the cluster or networking around an unmanaged
+running task.
+
 ```sh
-terraform -chdir=infrastructure/terraform destroy
+terraform -chdir=infrastructure/terraform plan -destroy -out=destroy.tfplan
+terraform -chdir=infrastructure/terraform show destroy.tfplan
+terraform -chdir=infrastructure/terraform apply destroy.tfplan
 ```
 
-Review and confirm the destroy plan using the same profile, region, bucket name,
-and state. `force_destroy = false` prevents Terraform from deleting a bucket
-that contains objects. If artifacts have been uploaded later, intentionally
-empty the bucket first, including object versions/delete markers if versioning
-was enabled outside this skeleton. Do not discard state before cleanup, and do
-not change the bucket name or region casually because that can replace resources.
-
-No real AWS plan, apply, or destroy is required for Story 11.1 verification.
+Do not run destroy without explicit approval. Terraform cannot delete nonempty
+repositories or the nonempty versioned bucket while `force_destroy = false`.

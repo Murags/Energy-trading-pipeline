@@ -88,6 +88,28 @@ class FixedSchedulePolicy(RetrainingPolicy):
 
 		return hook
 
+	def state(self) -> dict[str, Any]:
+		"""Include the interval anchor, without which the schedule would restart."""
+		anchor = self._schedule_timestamp
+		return {
+			**super().state(),
+			"interval_days": self._interval.days,
+			"schedule_timestamp": None if anchor is None else anchor.isoformat(),
+		}
+
+	def restore(self, state: Mapping[str, Any]) -> None:
+		"""Resume the schedule, refusing state saved under a different interval."""
+		super().restore(state)
+		recorded = state.get("interval_days")
+		if recorded is not None and recorded != self._interval.days:
+			raise ValueError(
+				f"Policy state uses interval_days={recorded}, "
+				f"not {self._interval.days}"
+			)
+		self._schedule_timestamp = self._restore_timestamp(
+			state.get("schedule_timestamp"), "schedule_timestamp"
+		)
+
 	def _decide(
 		self, decision_timestamp: pd.Timestamp, forecast_history: pd.DataFrame
 	) -> bool:

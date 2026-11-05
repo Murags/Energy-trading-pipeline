@@ -1,5 +1,7 @@
 """Streamlit review interface that reads only saved dashboard exports."""
 
+import os
+
 import pandas as pd
 
 from energy_trading_pipeline.dashboard.charts import (
@@ -12,6 +14,7 @@ from energy_trading_pipeline.dashboard.charts import (
 from energy_trading_pipeline.dashboard.data_loader import (
 	DashboardArtifactError,
 	load_dashboard_artifacts,
+	load_live_artifacts,
 )
 
 
@@ -60,17 +63,16 @@ def _apply_date_filter(
 	)
 
 
-def main() -> None:
-	"""Render exported results; importing this module needs no Streamlit runtime."""
-	import streamlit as st
-
-	st.set_page_config(page_title="DE-FR Spread Forecasts", layout="wide")
-	st.title("DE-FR Spread Forecasts")
-	exports_dir = st.sidebar.text_input(
-		"Exports directory", value="reports/dashboard_exports"
-	)
+def _render_backtest(st, exports_dir: str) -> None:
+	"""Render the existing read-only historical comparison view."""
 	try:
-		artifacts = load_dashboard_artifacts(exports_dir)
+		if exports_dir.startswith("s3://"):
+			cached_loader = st.cache_data(
+				ttl=300, show_spinner="Reading backtest exports…"
+			)(load_dashboard_artifacts)
+			artifacts = cached_loader(exports_dir)
+		else:
+			artifacts = load_dashboard_artifacts(exports_dir)
 	except DashboardArtifactError as error:
 		st.error(str(error))
 		return
@@ -176,6 +178,100 @@ def main() -> None:
 		st.subheader("Strategy Comparison")
 		st.plotly_chart(strategy_comparison_chart(metrics))
 		st.dataframe(metrics, hide_index=True)
+
+
+def _render_live(st, destination: str) -> None:
+	"""Render persisted daily forecasts without invoking any pipeline stage."""
+	st.subheader("Live Daily Forecast")
+	try:
+		cached_loader = st.cache_data(ttl=60, show_spinner="Reading live artifacts…")(
+			load_live_artifacts
+		)
+		artifacts = cached_loader(destination)
+	except DashboardArtifactError as error:
+		st.error(str(error))
+		return
+
+	latest = artifacts["latest_run"]
+	for field in ("ran_at", "issuance", "delivery_date", "market_through"):
+		if field not in latest:
+			st.error(f"Live artifact 'live/latest_run.yaml' is missing '{field}'.")
+			return
+	st.caption(
+		f"Last run: {latest['ran_at']} | Issuance: {latest['issuance']} | "
+		f"Delivery: {latest['delivery_date']} | Market through: "
+		f"{latest['market_through']}"
+	)
+
+	available = sorted(artifacts["forecasts"]["strategy"].dropna().unique())
+	selected = st.sidebar.multiselect(
+		"Live strategies", available, default=available, key="live_strategies"
+	)
+	if not selected:
+		st.info("No live strategies selected.")
+		return
+	forecasts = artifacts["forecasts"].loc[
+		artifacts["forecasts"]["strategy"].isin(selected)
+	].copy()
+	events = artifacts["retraining_events"].loc[
+		artifacts["retraining_events"]["strategy"].isin(selected)
+	].copy()
+	states = artifacts["states"].loc[
+		artifacts["states"]["strategy"].isin(selected)
+	].copy()
+
+	delivery_dates = sorted(forecasts["delivery_date"].dropna().unique(), reverse=True)
+	if not delivery_dates:
+		st.info("No live forecast delivery days are available.")
+		return
+	delivery = st.selectbox("Delivery date", delivery_dates, key="live_delivery_date")
+	delivery_forecasts = forecasts.loc[forecasts["delivery_date"] == delivery].copy()
+
+	st.markdown("#### Strategy state")
+	st.dataframe(states, hide_index=True)
+	st.markdown("#### Forecast vs actual")
+	if delivery_forecasts["actual"].isna().all():
+		st.info("Actual spreads are not available for this delivery day yet.")
+	st.plotly_chart(forecast_vs_actual_chart(delivery_forecasts))
+	st.dataframe(delivery_forecasts, hide_index=True)
+	st.markdown("#### Retraining events")
+	if events.empty:
+		st.info("No live retraining events have been recorded.")
+	else:
+		st.plotly_chart(retraining_events_chart(events))
+	st.dataframe(events, hide_index=True)
+
+
+def main() -> None:
+	"""Render saved backtest exports and optional live S3 artifacts."""
+	import streamlit as st
+
+	st.set_page_config(page_title="DE-FR Spread Forecasts", layout="wide")
+	st.title("DE-FR Spread Forecasts")
+	live_store_default = os.environ.get("ETP_STORE", "").strip()
+	exports_default = (
+		f"{live_store_default.rstrip('/')}/reports/dashboard_exports"
+		if live_store_default.startswith("s3://")
+		else "reports/dashboard_exports"
+	)
+	exports_dir = st.sidebar.text_input(
+		"Exports directory",
+		value=exports_default,
+		disabled=live_store_default.startswith("s3://"),
+	)
+	live_store = st.sidebar.text_input(
+		"Live artifact store",
+		value=live_store_default,
+		disabled=bool(live_store_default),
+	).strip()
+	if live_store:
+		live_tab, backtest_tab = st.tabs(["Live", "Backtest"])
+		with live_tab:
+			_render_live(st, live_store)
+		with backtest_tab:
+			_render_backtest(st, exports_dir)
+	else:
+		_render_backtest(st, exports_dir)
 
 
 if __name__ == "__main__":

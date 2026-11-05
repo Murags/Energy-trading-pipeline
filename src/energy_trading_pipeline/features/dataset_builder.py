@@ -33,6 +33,10 @@ REQUIRED_FEATURE_CONFIG_KEYS: tuple[str, ...] = ("lag_hours", "rolling_window_ho
 OPTIONAL_FEATURE_CONFIG_KEYS: tuple[str, ...] = (
     "rolling_shift_hours",
     "calendar_timezone",
+    # Consumed by features.availability, which joins them after this builder runs.
+    "day_ahead_forecast_columns",
+    "perfect_foresight_weather",
+    "issuance_window_hours",
     "calendar_features",
     "holiday_dates",
     "weather_columns",
