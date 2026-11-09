@@ -142,6 +142,13 @@ def run_dashboard(monkeypatch, working_dir):
     return testing.AppTest.from_file(str(app_path)).run(timeout=15)
 
 
+def _plotted_strategy_traces(app) -> list[dict]:
+    traces = []
+    for element in app.get("plotly_chart"):
+        traces.extend(json.loads(element.proto.spec)["data"])
+    return traces
+
+
 def test_streamlit_dashboard_views_filters_and_read_only_exports(
     streamlit_exports, monkeypatch
 ):
@@ -149,34 +156,41 @@ def test_streamlit_dashboard_views_filters_and_read_only_exports(
     app = run_dashboard(monkeypatch, streamlit_exports.parents[1])
     assert not app.exception
     assert not app.error
-    assert [tab.label for tab in app.tabs] == [
-        "Forecasts", "Rolling RMSE", "Retraining", "Models", "Comparison",
+    # Monitoring layout: filter bar, four KPI cards, two charts, two tables.
+    assert app.selectbox[0].value == "performance_triggered"
+    assert [metric.label for metric in app.metric] == [
+        "Rolling RMSE", "MAE", "Retraining events", "Active model",
     ]
-    assert len(app.get("plotly_chart")) == 5
-    assert len(app.dataframe) == 6
-    assert app.dataframe[0].value["rmse"].tolist() == [123.0] * 3
-    assert app.dataframe[0].value["mae"].tolist() == [456.0] * 3
-    app.sidebar.multiselect[0].set_value(["no_retraining"]).run()
-    assert not app.exception
-    for table in app.dataframe:
-        if "strategy" in table.value:
-            assert set(table.value["strategy"]) <= {"no_retraining"}
-        if "model_type" in table.value:
-            assert set(table.value["model_version"]) == {"fixture_model"}
-    for element in app.get("plotly_chart"):
-        figure = json.loads(element.proto.spec)
-        for trace in figure["data"]:
-            if trace["type"] == "scatter":
-                # No unselected strategy may reach a chart. The shared actual
-                # series is common to every strategy, so it carries no label.
-                assert "fixed_schedule" not in trace["name"]
-                assert "performance_triggered" not in trace["name"]
-                assert "no_retraining" in trace["name"] or trace["name"] == "actual"
+    assert [metric.value for metric in app.metric] == [
+        "42.00 €/MWh", "456.00 €/MWh", "0", "initial",
+    ]
+    assert len(app.get("plotly_chart")) == 2
+    comparison = next(
+        table.value for table in app.dataframe if "retraining_count" in table.value
+    )
+    # The comparison always lists every strategy's stored whole-window scores.
+    assert comparison["rmse"].tolist() == [123.0] * 3
+    assert comparison["mae"].tolist() == [456.0] * 3
     assert any("No retraining events" in info.value for info in app.info)
-    app.sidebar.multiselect[0].set_value([]).run()
+
+    app.selectbox[0].set_value("fixed_schedule")
+    app.button[0].click().run(timeout=15)
     assert not app.exception
-    assert any("No strategies selected" in info.value for info in app.info)
-    assert not app.get("plotly_chart")
+    assert [metric.value for metric in app.metric] == [
+        "42.00 €/MWh", "456.00 €/MWh", "1", "initial",
+    ]
+    exported_rows = app.dataframe[-1].value
+    assert set(exported_rows["strategy"]) == {"fixed_schedule"}
+    events_table = next(
+        table.value for table in app.dataframe if "trigger" in table.value
+    )
+    assert events_table["rmse"].tolist() == [42.0]
+    marker_traces = [
+        trace for trace in _plotted_strategy_traces(app)
+        if trace["name"] == "Retraining triggered"
+    ]
+    assert len(marker_traces) == 1
+    assert marker_traces[0]["y"] == [42.0]
     assert {path: path.read_bytes() for path in streamlit_exports.iterdir()} == before
 
 
@@ -204,8 +218,14 @@ def test_streamlit_dashboard_handles_sparse_exports(
     elif scenario == "no_events":
         assert any("No retraining events" in info.value for info in app.info)
     else:
-        assert app.dataframe[0].value[["rmse", "mae"]].isna().all().all()
+        comparison = next(
+            table.value for table in app.dataframe
+            if "retraining_count" in table.value
+        )
+        assert comparison[["rmse", "mae"]].isna().all().all()
+        assert app.metric[0].value == "—"
         assert any("Rolling RMSE unavailable" in info.value for info in app.info)
+        assert any("Actual spreads unavailable" in info.value for info in app.info)
 
 
 def test_streamlit_dashboard_missing_exports_and_custom_directory(
@@ -220,7 +240,7 @@ def test_streamlit_dashboard_missing_exports_and_custom_directory(
     app.sidebar.text_input[0].set_value(str(streamlit_exports)).run()
     assert not app.exception
     assert not app.error
-    assert len(app.get("plotly_chart")) == 5
+    assert len(app.get("plotly_chart")) == 2
 
 
 def test_loads_default_exports_without_changing_files(

@@ -49,6 +49,8 @@ CHART_INPUTS = [
     ("retraining_events_chart", "events"),
     ("model_versions_chart", "forecasts"),
     ("strategy_comparison_chart", "metrics"),
+    ("monitoring_forecast_chart", "forecasts"),
+    ("rolling_rmse_triggers_chart", "forecasts"),
 ]
 
 
@@ -167,3 +169,46 @@ def test_date_filter_handles_an_empty_export():
         empty, pd.Timestamp("2024-01-01", tz="UTC"), pd.Timestamp("2024-02-01", tz="UTC")
     )
     assert result.empty
+
+
+def test_monitoring_forecast_chart_draws_actual_solid_and_forecast_dashed(
+    chart_frames,
+):
+    single = chart_frames["forecasts"].query("strategy == 'fixed_schedule'")
+    figure = charts.monitoring_forecast_chart(single)
+    assert [trace.name for trace in figure.data] == ["Actual", "Forecast"]
+    actual, forecast = figure.data
+    assert actual.line.dash is None and forecast.line.dash == "dash"
+    np.testing.assert_equal(list(actual.y), [1.0, np.nan, 3.0])
+    np.testing.assert_equal(list(forecast.y), [0.0, 1.0, 2.0])
+    for trace in figure.data:
+        assert trace.connectgaps is False
+        assert pd.DatetimeIndex(trace.x).is_monotonic_increasing
+
+
+def test_rolling_rmse_triggers_chart_places_events_on_stored_values(chart_frames):
+    single = chart_frames["forecasts"].query("strategy == 'fixed_schedule'")
+    events = pd.concat([
+        chart_frames["events"],
+        chart_frames["events"].assign(
+            timestamp=single["timestamp"].min() + pd.Timedelta(hours=1),
+            rolling_rmse=np.nan,
+        ),
+    ], ignore_index=True)
+    original = events.copy(deep=True)
+    figure = charts.rolling_rmse_triggers_chart(single, events, threshold=1.5)
+    line, markers = figure.data
+    np.testing.assert_equal(list(line.y), [np.nan, 1.0, 2.0])
+    # The first event keeps its own stored RMSE; the second recorded none, so
+    # it sits on the stored forecast rolling RMSE at its timestamp.
+    assert list(markers.y) == [2.0, 1.0]
+    assert markers.name == "Retraining triggered"
+    assert [shape.y0 for shape in figure.layout.shapes] == [1.5]
+    pd.testing.assert_frame_equal(events, original)
+
+
+def test_rolling_rmse_triggers_chart_omits_missing_threshold(chart_frames):
+    figure = charts.rolling_rmse_triggers_chart(
+        chart_frames["forecasts"], chart_frames["events"], threshold=np.nan
+    )
+    assert not figure.layout.shapes
