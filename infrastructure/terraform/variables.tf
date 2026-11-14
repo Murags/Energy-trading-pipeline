@@ -171,3 +171,21 @@ variable "budget_notification_email" {
     error_message = "Provide a valid budget notification email address."
   }
 }
+
+variable "github_repository" {
+  description = "GitHub repository (owner/name) allowed to push images through OIDC; null disables the publisher role."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.github_repository == null || can(regex("^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$", var.github_repository))
+    error_message = "Use the owner/name form, e.g. octocat/example."
+  }
+}
+
+variable "github_deploy_branch" {
+  description = "Only workflows running on this branch may assume the image publisher role."
+  type        = string
+  default     = "main"
+  nullable    = false
+}

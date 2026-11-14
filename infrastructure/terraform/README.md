@@ -237,3 +237,23 @@ terraform -chdir=infrastructure/terraform apply destroy.tfplan
 
 Do not run destroy without explicit approval. Terraform cannot delete nonempty
 repositories or the nonempty versioned bucket while `force_destroy = false`.
+
+## Image Publishing from GitHub Actions
+
+`.github/workflows/deploy-images.yml` builds both images after CI passes on
+`main` and pushes them to ECR as `build-<12-char-sha>`. It authenticates
+through GitHub OIDC (`github_oidc.tf`): set `github_repository = "owner/name"`
+to create a role that only that repository's `main` branch can assume, and that
+can only push to the two ECR repositories. No AWS keys are stored in GitHub.
+
+After the reviewed apply, store the role ARN as a repository variable (not a
+secret; an ARN grants nothing on its own):
+
+```sh
+gh variable set AWS_IMAGE_PUBLISHER_ROLE_ARN \
+  --body "$(terraform -chdir=infrastructure/terraform output -raw github_image_publisher_role_arn)"
+```
+
+The workflow never changes running infrastructure. To roll out a published
+image, set `lambda_image_tag` or `dashboard_image_tag` to the tag shown in the
+workflow summary, then `plan`, review, and `apply` locally as above.
