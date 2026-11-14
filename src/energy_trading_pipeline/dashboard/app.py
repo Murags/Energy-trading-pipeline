@@ -93,6 +93,13 @@ def _render_backtest(st, exports_dir: str) -> None:
 		st.error(str(error))
 		return
 
+	# if artifacts["metrics"]["run_id"].astype(str).str.startswith("synthetic").any():
+	# 	st.warning(
+	# 		"Synthetic demo data: these exports were simulated for dashboard "
+	# 		"testing and are not experiment results.",
+	# 		icon="⚠️",
+	# 	)
+
 	available = sorted({
 		strategy
 		for name in ("forecasts", "metrics", "retraining_events")

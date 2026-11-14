@@ -721,6 +721,21 @@ uv run --extra dashboard --extra test pytest -q \
   tests/unit/test_dashboard_live.py
 ```
 
+### Synthetic Demo Exports
+
+To exercise the dashboard against a "healthy model" scenario without touching
+real results, generate a simulated export set:
+
+```bash
+uv run python scripts/make_demo_dashboard_exports.py
+```
+
+It writes to `reports/dashboard_exports_demo/` (it refuses to write to
+`reports/dashboard_exports`). Enter that path in the sidebar's **Exports
+directory**. The data are simulated, not produced by any model, and the
+dashboard shows a "Synthetic demo data" banner whenever they are loaded. Do not
+report these numbers as experiment results.
+
 ### Static Report Fallback
 
 Streamlit is optional for reviewing saved results. No full backtest, training,
