@@ -71,3 +71,8 @@ output "dashboard_security_group_id" {
   description = "Security group supplied to the on-demand ECS run-task command."
   value       = aws_security_group.dashboard.id
 }
+
+output "github_image_publisher_role_arn" {
+  description = "Role ARN to store as the AWS_IMAGE_PUBLISHER_ROLE_ARN GitHub repository variable."
+  value       = one(aws_iam_role.github_image_publisher[*].arn)
+}

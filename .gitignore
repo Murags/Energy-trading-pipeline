@@ -4,6 +4,7 @@ _bmad
 !.github/workflows/
 .github/workflows/*
 !.github/workflows/ci.yml
+!.github/workflows/deploy-images.yml
 .claude
 .agents
 
@@ -36,3 +37,6 @@ data/raw/open_meteo/weather/run_*/
 data/processed/run_*/
 models/artifacts/model_*/
 models/registry/models_index.yaml
+
+# macOS Finder metadata
+.DS_Store

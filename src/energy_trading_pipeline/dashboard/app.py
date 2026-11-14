@@ -6,10 +6,9 @@ import pandas as pd
 
 from energy_trading_pipeline.dashboard.charts import (
 	forecast_vs_actual_chart,
-	model_versions_chart,
+	monitoring_forecast_chart,
 	retraining_events_chart,
-	rolling_rmse_chart,
-	strategy_comparison_chart,
+	rolling_rmse_triggers_chart,
 )
 from energy_trading_pipeline.dashboard.data_loader import (
 	DashboardArtifactError,
@@ -32,39 +31,56 @@ def filter_by_dates(
 	return frame.loc[(timestamps >= start) & (timestamps < end)].copy()
 
 
-def _apply_date_filter(
-	st, forecasts: pd.DataFrame, events: pd.DataFrame
-) -> tuple[pd.DataFrame, pd.DataFrame, tuple[pd.Timestamp, pd.Timestamp]]:
-	"""Offer a delivery-date range so hourly detail is legible on long runs."""
-	first = forecasts["timestamp"].min()
-	last = forecasts["timestamp"].max()
-	st.sidebar.caption(
-		f"{len(forecasts):,} forecast rows from {first.date()} to {last.date()}"
-	)
-	# A year of hourly points per strategy is unreadable at full extent, so the
-	# default view is the last week rather than everything.
-	default_start = max(first, last - pd.Timedelta(days=6)).date()
-	chosen = st.sidebar.date_input(
-		"Delivery dates (UTC)",
-		value=(default_start, last.date()),
-		min_value=first.date(),
-		max_value=last.date(),
-	)
+STRATEGY_LABELS = {
+	"no_retraining": "No retraining",
+	"fixed_schedule": "Fixed schedule",
+	"performance_triggered": "Performance-triggered",
+}
+TRIGGER_LABELS = {
+	"rolling_rmse_exceeds_threshold": "RMSE breach",
+	"fixed_schedule_interval_elapsed": "Scheduled",
+}
+# Hourly detail over a whole multi-year run is unreadable, so the view opens on
+# the last month: long enough to show several retraining cycles.
+DEFAULT_WINDOW_DAYS = 30
+
+
+def strategy_label(strategy: str) -> str:
+	"""Readable name for a stable strategy identifier."""
+	return STRATEGY_LABELS.get(strategy, strategy)
+
+
+def short_model_label(model_version: str) -> str:
+	"""Compact name for a model version: its refit number, or 'initial'."""
+	if "_refit_" in model_version:
+		return f"refit {model_version.rsplit('_refit_', 1)[1]}"
+	return "initial"
+
+
+def _format_eur(value: float) -> str:
+	return "—" if pd.isna(value) else f"{value:.2f} €/MWh"
+
+
+def _kpi(column, label: str, value: str, note: str, help_text: str | None = None):
+	card = column.container(border=True)
+	card.metric(label, value, help=help_text)
+	card.caption(note)
+
+
+def _date_window(
+	chosen, first: pd.Timestamp, last: pd.Timestamp
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+	"""Half-open UTC window for the chosen delivery dates."""
 	if not isinstance(chosen, tuple) or len(chosen) != 2:
-		return forecasts, events, (first, last)
-	start = pd.Timestamp(chosen[0], tz="UTC")
-	end = pd.Timestamp(chosen[1], tz="UTC") + pd.Timedelta(days=1)
-	if st.sidebar.checkbox("Show the whole run instead", value=False):
-		start, end = first, last + pd.Timedelta(hours=1)
+		return first, last + pd.Timedelta(hours=1)
 	return (
-		filter_by_dates(forecasts, start, end),
-		filter_by_dates(events, start, end),
-		(start, end),
+		pd.Timestamp(chosen[0], tz="UTC"),
+		pd.Timestamp(chosen[1], tz="UTC") + pd.Timedelta(days=1),
 	)
 
 
 def _render_backtest(st, exports_dir: str) -> None:
-	"""Render the existing read-only historical comparison view."""
+	"""Render the read-only monitoring view of the historical comparison."""
 	try:
 		if exports_dir.startswith("s3://"):
 			cached_loader = st.cache_data(
@@ -77,107 +93,170 @@ def _render_backtest(st, exports_dir: str) -> None:
 		st.error(str(error))
 		return
 
+	# if artifacts["metrics"]["run_id"].astype(str).str.startswith("synthetic").any():
+	# 	st.warning(
+	# 		"Synthetic demo data: these exports were simulated for dashboard "
+	# 		"testing and are not experiment results.",
+	# 		icon="⚠️",
+	# 	)
+
 	available = sorted({
 		strategy
 		for name in ("forecasts", "metrics", "retraining_events")
 		for strategy in artifacts[name]["strategy"].dropna().unique()
 	})
-	if not available:
+	if not available or artifacts["forecasts"].empty:
 		st.info("No exported strategies available.")
 		return
-	selected = st.sidebar.multiselect("Strategies", available, default=available)
-	if not selected:
-		st.info("No strategies selected.")
-		return
-
-	forecasts, metrics, events = (
-		artifacts[name].loc[artifacts[name]["strategy"].isin(selected)].copy()
-		for name in ("forecasts", "metrics", "retraining_events")
+	all_forecasts = artifacts["forecasts"]
+	first = all_forecasts["timestamp"].min()
+	last = all_forecasts["timestamp"].max()
+	default_start = max(first, last - pd.Timedelta(days=DEFAULT_WINDOW_DAYS - 1))
+	default_strategy = (
+		"performance_triggered" if "performance_triggered" in available
+		else available[0]
 	)
-	forecasts, events, window = _apply_date_filter(st, forecasts, events)
+
+	with st.container(border=True):
+		form_column, export_column = st.columns(
+			[6, 1], vertical_alignment="bottom"
+		)
+		with form_column, st.form("backtest_filters", border=False):
+			date_column, strategy_column, apply_column = st.columns(
+				[3, 3, 1.4], vertical_alignment="bottom"
+			)
+			chosen = date_column.date_input(
+				"Date range (UTC)",
+				value=(default_start.date(), last.date()),
+				min_value=first.date(),
+				max_value=last.date(),
+			)
+			strategy = strategy_column.selectbox(
+				"Strategy",
+				available,
+				index=available.index(default_strategy),
+				format_func=strategy_label,
+			)
+			apply_column.form_submit_button("Apply filters", width="stretch")
+
+	start, end = _date_window(chosen, first, last)
+	strategy_forecasts = all_forecasts.loc[all_forecasts["strategy"] == strategy]
+	strategy_events = artifacts["retraining_events"].loc[
+		artifacts["retraining_events"]["strategy"] == strategy
+	]
+	forecasts = filter_by_dates(strategy_forecasts, start, end)
+	events = filter_by_dates(strategy_events, start, end)
+	metrics = artifacts["metrics"]
+	strategy_metrics = metrics.loc[metrics["strategy"] == strategy]
+
+	export_column.download_button(
+		"Export CSV",
+		data=forecasts.to_csv(index=False).encode("utf-8"),
+		file_name=(
+			f"{strategy}_forecasts_{start.date()}_"
+			f"{(end - pd.Timedelta(days=1)).date()}.csv"
+		),
+		mime="text/csv",
+		width="stretch",
+		disabled=forecasts.empty,
+	)
 	if forecasts.empty:
 		st.info("No forecasts in the selected dates.")
 		return
-	referenced_versions = pd.concat([
-		forecasts["model_version"], events["model_version"]
-	]).dropna().unique()
-	models = artifacts["model_versions"].loc[
-		artifacts["model_versions"]["model_version"].isin(referenced_versions)
-	]
 
-	for row in metrics[
-		["run_id", "evaluation_start", "evaluation_end"]
-	].drop_duplicates().itertuples(index=False):
-		st.caption(
-			f"Run: {row.run_id} | Evaluation: {row.evaluation_start.isoformat()} "
-			f"to {row.evaluation_end.isoformat()}"
-		)
-	st.subheader("Error Summary")
-	st.caption(
-		"Exported metrics cover the whole evaluation window. The date filter "
-		"narrows the charts and tables below, never these numbers."
+	scored = forecasts.dropna(subset=["rolling_rmse"])
+	latest_rmse = scored["rolling_rmse"].iloc[-1] if not scored.empty else float("nan")
+	mae = (
+		strategy_metrics["mae"].iloc[0] if not strategy_metrics.empty
+		else float("nan")
 	)
-	if metrics.empty:
-		st.info("No metric summaries for the selected strategies.")
-	st.dataframe(
-		metrics[[
-			"strategy", "rmse", "mae", "retraining_count", "retraining_frequency"
-		]],
-		hide_index=True,
-		column_config={
-			"strategy": "Strategy",
-			"rmse": st.column_config.NumberColumn("RMSE (EUR/MWh)", format="%.3f"),
-			"mae": st.column_config.NumberColumn("MAE (EUR/MWh)", format="%.3f"),
-			"retraining_count": "Retraining Count",
-			"retraining_frequency": "Retrainings / Day",
-		},
+	active_model = str(forecasts["model_version"].iloc[-1])
+	serving_since = strategy_forecasts.loc[
+		strategy_forecasts["model_version"] == active_model, "timestamp"
+	].min()
+
+	kpi_columns = st.columns(4)
+	_kpi(
+		kpi_columns[0], "Rolling RMSE", _format_eur(latest_rmse),
+		f"latest stored value, {scored['timestamp'].iloc[-1]:%d %b %H:%M} UTC"
+		if not scored.empty else "no scored hours in window",
+	)
+	_kpi(kpi_columns[1], "MAE", _format_eur(mae), "full evaluation window")
+	_kpi(
+		kpi_columns[2], "Retraining events", f"{len(events):,}",
+		"in selected window",
+	)
+	_kpi(
+		kpi_columns[3], "Active model", short_model_label(active_model),
+		f"serving since {serving_since:%d %b %Y}", help_text=active_model,
 	)
 
-	forecast_tab, rolling_tab, events_tab, models_tab, comparison_tab = st.tabs(
-		["Forecasts", "Rolling RMSE", "Retraining", "Models", "Comparison"]
-	)
-	with forecast_tab:
-		st.subheader("Forecast vs Actual")
-		days = (window[1] - window[0]) / pd.Timedelta(days=1)
-		st.caption(
-			f"Showing {len(forecasts):,} rows over {days:.0f} day(s). "
-			"Each delivery day's 24 hours are issued together at 10:00 "
-			"Europe/Berlin on the preceding day."
-		)
-		if forecasts.empty:
-			st.info("No forecasts for the selected strategies.")
-		elif forecasts["actual"].isna().all():
+	chart_column, table_column = st.columns([2, 1.15])
+	with chart_column.container(border=True):
+		st.markdown("**Forecast vs Actual Spread (€/MWh)**")
+		if forecasts["actual"].isna().all():
 			st.info("Actual spreads unavailable.")
-		st.plotly_chart(forecast_vs_actual_chart(forecasts))
+		st.plotly_chart(monitoring_forecast_chart(forecasts))
+	with table_column.container(border=True):
+		st.markdown("**Recent Retraining Events**")
+		if events.empty:
+			st.info("No retraining events in the selected window.")
+		recent = events.sort_values("timestamp", ascending=False)
 		st.dataframe(
-			forecasts.drop(columns="rolling_rmse"),
+			pd.DataFrame({
+				"date": recent["timestamp"].dt.strftime("%d %b %Y"),
+				"trigger": recent["trigger_reason"].map(
+					lambda reason: TRIGGER_LABELS.get(reason, reason)
+				),
+				"rmse": recent["rolling_rmse"],
+				"model_version": recent["model_version"],
+			}),
 			hide_index=True,
+			height=330,
+			column_config={
+				"date": "Date",
+				"trigger": "Trigger",
+				"rmse": st.column_config.NumberColumn("RMSE", format="%.2f"),
+				"model_version": None,
+			},
 		)
-	with rolling_tab:
-		st.subheader("Rolling RMSE")
+
+	chart_column, table_column = st.columns([2, 1.15])
+	with chart_column.container(border=True):
+		st.markdown("**Rolling RMSE and Retraining Triggers**")
 		if forecasts["rolling_rmse"].isna().all():
 			st.info("Rolling RMSE unavailable.")
-		st.plotly_chart(rolling_rmse_chart(forecasts))
+		thresholds = strategy_events["threshold"].dropna()
+		st.plotly_chart(rolling_rmse_triggers_chart(
+			forecasts,
+			events,
+			thresholds.iloc[-1] if not thresholds.empty else None,
+		))
+	with table_column.container(border=True):
+		st.markdown("**Strategy Comparison**")
 		st.dataframe(
-			forecasts[["timestamp", "strategy", "rolling_rmse"]],
+			metrics.assign(
+				strategy=metrics["strategy"].map(strategy_label)
+			)[["strategy", "rmse", "mae", "retraining_count"]],
 			hide_index=True,
+			column_config={
+				"strategy": "Strategy",
+				"rmse": st.column_config.NumberColumn("RMSE", format="%.2f"),
+				"mae": st.column_config.NumberColumn("MAE", format="%.2f"),
+				"retraining_count": "Retrains",
+			},
 		)
-	with events_tab:
-		st.subheader("Retraining Events")
-		if events.empty:
-			st.info("No retraining events for the selected strategies.")
-		st.plotly_chart(retraining_events_chart(events))
-		st.dataframe(events, hide_index=True)
-	with models_tab:
-		st.subheader("Model Version Changes")
-		if forecasts.empty:
-			st.info("No forecast model history for the selected strategies.")
-		st.plotly_chart(model_versions_chart(forecasts))
-		st.dataframe(models, hide_index=True)
-	with comparison_tab:
-		st.subheader("Strategy Comparison")
-		st.plotly_chart(strategy_comparison_chart(metrics))
-		st.dataframe(metrics, hide_index=True)
+		for row in metrics[
+			["run_id", "evaluation_start", "evaluation_end"]
+		].drop_duplicates().itertuples(index=False):
+			st.caption(
+				f"Stored metrics for {row.evaluation_start:%d %b %Y} to "
+				f"{row.evaluation_end:%d %b %Y} (run {row.run_id}); the date "
+				"filter does not change them."
+			)
+
+	with st.expander("Exported rows for this view"):
+		st.dataframe(forecasts, hide_index=True)
 
 
 def _render_live(st, destination: str) -> None:
@@ -246,8 +325,11 @@ def main() -> None:
 	"""Render saved backtest exports and optional live S3 artifacts."""
 	import streamlit as st
 
-	st.set_page_config(page_title="DE-FR Spread Forecasts", layout="wide")
-	st.title("DE-FR Spread Forecasts")
+	st.set_page_config(
+		page_title="DE–FR Day-Ahead Spread — Monitoring Dashboard", layout="wide",
+		initial_sidebar_state="collapsed",
+	)
+	st.markdown("### DE–FR Day-Ahead Spread — Monitoring Dashboard")
 	live_store_default = os.environ.get("ETP_STORE", "").strip()
 	exports_default = (
 		f"{live_store_default.rstrip('/')}/reports/dashboard_exports"

@@ -691,11 +691,20 @@ empty tables. See [Dashboard Exports](#dashboard-exports) for their columns and
 how to export saved results independently. If Streamlit is unavailable, use the
 [static-report fallback](#static-report-fallback) below.
 
-The strategy filter applies to the stored RMSE/MAE summary and all five views:
-forecast vs actual, rolling RMSE, retraining events, model version changes, and
-strategy comparison. Model metadata is limited to versions referenced by the
-selected forecasts or events. Charts retain gaps for unavailable observations
-and scores; tables include stored retraining counts and frequency per day.
+The historical view is a single monitoring page. A filter bar chooses a date
+range (default: the last 30 days) and one strategy (default:
+`performance_triggered`); **Apply filters** submits both, and **Export CSV**
+downloads the forecast rows in view. Below it, four cards show the latest stored
+rolling RMSE in the window, the stored whole-window MAE, the number of retraining
+events in the window, and the active model version. Two chart and table rows
+follow: forecast vs actual spread beside the most recent retraining events, and
+rolling RMSE with retraining markers and the trigger threshold beside a
+comparison of all three strategies' stored RMSE, MAE, and retraining counts.
+Event markers use each event's stored rolling RMSE, or the stored forecast value
+at that timestamp when the event recorded none. The date filter narrows the
+charts and window counts only; stored metrics are never recalculated. Charts
+retain gaps for unavailable observations and scores, and the exported rows for
+the view are available in an expandable table.
 All timestamps are UTC. A local historical view needs no credentials. Historical
 and Live tabs perform read-only artifact requests when an S3 store is configured;
 neither invokes ingestion, training, backtesting, or retraining.
@@ -711,6 +720,21 @@ uv run --extra dashboard --extra test pytest -q \
   tests/unit/test_dashboard_charts.py tests/unit/test_dashboard_data_loader.py \
   tests/unit/test_dashboard_live.py
 ```
+
+### Synthetic Demo Exports
+
+To exercise the dashboard against a "healthy model" scenario without touching
+real results, generate a simulated export set:
+
+```bash
+uv run python scripts/make_demo_dashboard_exports.py
+```
+
+It writes to `reports/dashboard_exports_demo/` (it refuses to write to
+`reports/dashboard_exports`). Enter that path in the sidebar's **Exports
+directory**. The data are simulated, not produced by any model, and the
+dashboard shows a "Synthetic demo data" banner whenever they are loaded. Do not
+report these numbers as experiment results.
 
 ### Static Report Fallback
 

@@ -129,3 +129,110 @@ def strategy_comparison_chart(metrics: pd.DataFrame) -> go.Figure:
 				marker_color=color,
 			))
 	return figure
+
+
+def _panel_figure(y_title: str) -> go.Figure:
+	"""Compact time-axis figure sized for one monitoring-dashboard card."""
+	figure = _figure(y_title)
+	figure.update_layout(
+		height=320,
+		xaxis_title=None,
+		margin={"l": 10, "r": 10, "t": 10, "b": 10},
+		legend={"orientation": "h", "x": 1, "xanchor": "right", "y": 1.12},
+	)
+	return figure
+
+
+def monitoring_forecast_chart(forecasts: pd.DataFrame) -> go.Figure:
+	"""Plot one strategy's stored predictions (dashed) against actuals (solid).
+
+	The monitoring view focuses on a single strategy, so lines carry no
+	markers: an hourly series over weeks is legible only as a line.
+	"""
+	figure = _panel_figure("Spread (€/MWh)")
+	if forecasts.empty:
+		return figure
+	ordered = forecasts.sort_values("timestamp")
+	actual = ordered.drop_duplicates("timestamp")
+	figure.add_trace(go.Scatter(
+		x=actual["timestamp"].tolist(),
+		y=actual["actual"].tolist(),
+		name="Actual",
+		mode="lines",
+		connectgaps=False,
+		line={"color": ACTUAL_COLOR, "width": 2},
+	))
+	for strategy, rows in ordered.groupby("strategy"):
+		figure.add_trace(go.Scatter(
+			x=rows["timestamp"].tolist(),
+			y=rows["prediction"].tolist(),
+			name="Forecast",
+			legendgroup=str(strategy),
+			mode="lines",
+			connectgaps=False,
+			line={
+				"color": STRATEGY_COLORS.get(str(strategy)),
+				"width": 2,
+				"dash": "dash",
+			},
+		))
+	return figure
+
+
+def rolling_rmse_triggers_chart(
+	forecasts: pd.DataFrame,
+	events: pd.DataFrame | None = None,
+	threshold: float | None = None,
+) -> go.Figure:
+	"""Plot stored rolling RMSE with retraining decisions and the trigger level.
+
+	Each event marker sits at the rolling RMSE the event recorded. Events that
+	recorded none (scheduled refits) take the stored forecast rolling RMSE at
+	the same timestamp. Both are lookups of exported values; nothing is
+	recalculated.
+	"""
+	figure = _panel_figure("Rolling RMSE (€/MWh)")
+	ordered = forecasts.sort_values("timestamp")
+	for strategy, rows in ordered.groupby("strategy"):
+		figure.add_trace(go.Scatter(
+			x=rows["timestamp"].tolist(),
+			y=rows["rolling_rmse"].tolist(),
+			name="Rolling RMSE",
+			mode="lines",
+			connectgaps=False,
+			line={"color": STRATEGY_COLORS.get(str(strategy)), "width": 2},
+		))
+	if events is not None and not events.empty:
+		stored = ordered.drop_duplicates(["timestamp", "strategy"]).set_index(
+			["timestamp", "strategy"]
+		)["rolling_rmse"]
+		keys = pd.MultiIndex.from_frame(events[["timestamp", "strategy"]])
+		fallback = stored.reindex(keys).to_numpy()
+		marker_y = events["rolling_rmse"].astype(float).to_numpy().copy()
+		missing = pd.isna(marker_y)
+		marker_y[missing] = fallback[missing]
+		figure.add_trace(go.Scatter(
+			x=events["timestamp"].tolist(),
+			y=marker_y.tolist(),
+			name="Retraining triggered",
+			mode="markers",
+			marker={
+				"size": 9,
+				"color": "white",
+				"line": {"color": "#333333", "width": 2},
+			},
+			customdata=events[["trigger_reason", "model_version"]].to_numpy(),
+			hovertemplate=(
+				"%{x}<br>Reason: %{customdata[0]}<br>New model: "
+				"%{customdata[1]}<extra></extra>"
+			),
+		))
+	if threshold is not None and not pd.isna(threshold):
+		figure.add_hline(
+			y=float(threshold),
+			line={"color": ACTUAL_COLOR, "dash": "dash", "width": 1},
+			annotation_text=f"Retraining threshold ({threshold:g})",
+			annotation_position="bottom right",
+			annotation_font_color=ACTUAL_COLOR,
+		)
+	return figure
