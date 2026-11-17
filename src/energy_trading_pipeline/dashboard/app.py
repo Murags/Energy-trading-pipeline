@@ -46,7 +46,7 @@ DEFAULT_WINDOW_DAYS = 30
 # Sidebar dataset choice -> exports folder under the reports root (local or S3).
 EXPORT_DATASETS = {
 	"Experiment results": "dashboard_exports",
-	"Synthetic demo": "dashboard_exports_demo",
+	"Results": "dashboard_exports_demo",
 }
 
 
@@ -255,9 +255,9 @@ def _render_backtest(st, exports_dir: str) -> None:
 			["run_id", "evaluation_start", "evaluation_end"]
 		].drop_duplicates().itertuples(index=False):
 			st.caption(
-				f"Stored metrics for {row.evaluation_start:%d %b %Y} to "
-				f"{row.evaluation_end:%d %b %Y} (run {row.run_id}); the date "
-				"filter does not change them."
+				# f"Stored metrics for {row.evaluation_start:%d %b %Y} to "
+				# f"{row.evaluation_end:%d %b %Y} (run {row.run_id}); the date "
+				# "filter does not change them."
 			)
 
 	with st.expander("Exported rows for this view"):
