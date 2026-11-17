@@ -43,6 +43,11 @@ TRIGGER_LABELS = {
 # Hourly detail over a whole multi-year run is unreadable, so the view opens on
 # the last month: long enough to show several retraining cycles.
 DEFAULT_WINDOW_DAYS = 30
+# Sidebar dataset choice -> exports folder under the reports root (local or S3).
+EXPORT_DATASETS = {
+	"Experiment results": "dashboard_exports",
+	"Synthetic demo": "dashboard_exports_demo",
+}
 
 
 def strategy_label(strategy: str) -> str:
@@ -331,11 +336,13 @@ def main() -> None:
 	)
 	st.markdown("### DE–FR Day-Ahead Spread — Monitoring Dashboard")
 	live_store_default = os.environ.get("ETP_STORE", "").strip()
-	exports_default = (
-		f"{live_store_default.rstrip('/')}/reports/dashboard_exports"
+	exports_root = (
+		f"{live_store_default.rstrip('/')}/reports"
 		if live_store_default.startswith("s3://")
-		else "reports/dashboard_exports"
+		else "reports"
 	)
+	dataset = st.sidebar.radio("Backtest dataset", list(EXPORT_DATASETS))
+	exports_default = f"{exports_root}/{EXPORT_DATASETS[dataset]}"
 	exports_dir = st.sidebar.text_input(
 		"Exports directory",
 		value=exports_default,
