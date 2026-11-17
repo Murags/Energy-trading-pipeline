@@ -49,3 +49,22 @@ def test_demo_is_deterministic_and_triggers_respect_threshold(demo):
         assert served["timestamp"].min() > event.timestamp
     rmse = first["metrics"].set_index("strategy")["rmse"]
     assert np.isfinite(rmse).all()
+
+
+def test_performance_refits_follow_sustained_breaches_only(demo):
+    frames = demo.build_demo_exports()
+    forecasts = frames["forecasts"]
+    daily = forecasts.loc[
+        (forecasts["strategy"] == "performance_triggered")
+        & (forecasts["timestamp"].dt.hour == demo.DECISION_HOUR_UTC)
+    ].set_index("timestamp")["rolling_rmse"]
+    events = frames["retraining_events"].query("strategy == 'performance_triggered'")
+    for timestamp in events["timestamp"]:
+        recent = daily.loc[:timestamp].iloc[-demo.CONSECUTIVE_BREACHES:]
+        assert (recent > demo.THRESHOLD).all()
+    # Some breaches recover on their own; a single bad day never forces a refit.
+    above = daily > demo.THRESHOLD
+    run_lengths = above.groupby((above != above.shift()).cumsum()).agg(
+        ["first", "size"]
+    ).query("first")["size"]
+    assert (run_lengths < demo.CONSECUTIVE_BREACHES).any()

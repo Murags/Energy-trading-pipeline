@@ -135,14 +135,14 @@ resource "aws_iam_role_policy" "dashboard" {
         Action   = "s3:ListBucket"
         Resource = aws_s3_bucket.artifacts.arn
         Condition = {
-          StringLike = { "s3:prefix" = ["live", "live/*", "reports/dashboard_exports", "reports/dashboard_exports/*"] }
+          StringLike = { "s3:prefix" = ["live", "live/*", "reports/dashboard_exports", "reports/dashboard_exports/*", "reports/dashboard_exports_demo", "reports/dashboard_exports_demo/*"] }
         }
       },
       {
         Sid      = "ReadLiveArtifacts"
         Effect   = "Allow"
         Action   = "s3:GetObject"
-        Resource = ["${aws_s3_bucket.artifacts.arn}/live/*", "${aws_s3_bucket.artifacts.arn}/reports/dashboard_exports/*"]
+        Resource = ["${aws_s3_bucket.artifacts.arn}/live/*", "${aws_s3_bucket.artifacts.arn}/reports/dashboard_exports/*", "${aws_s3_bucket.artifacts.arn}/reports/dashboard_exports_demo/*"]
       },
     ]
   })

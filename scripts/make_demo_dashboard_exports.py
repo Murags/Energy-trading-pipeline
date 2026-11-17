@@ -32,13 +32,25 @@ BASE_VERSIONS = {
 DECISION_HOUR_UTC = 17
 WINDOW_HOURS = 7 * 24
 MIN_PERIODS_HOURS = 6
-THRESHOLD = 6.0
+THRESHOLD = 9.0
+# Performance-triggered retrains only after this many consecutive daily
+# decisions find rolling RMSE above the threshold, so a one-day excursion that
+# recovers by itself never causes a refit.
+CONSECUTIVE_BREACHES = 3
 FIXED_INTERVAL_DAYS = 7
 # Error scale (EUR/MWh) of a fresh model, the level it degrades towards, and
 # how many days that degradation takes to close ~63% of the gap.
-FRESH_SIGMA = 3.4
-STALE_SIGMA = 9.0
-DEGRADATION_DAYS = 70.0
+FRESH_SIGMA = 5.6
+STALE_SIGMA = 12.5
+DEGRADATION_DAYS = 75.0
+# Market-shock episodes (e.g. outages, interconnector constraints) per year,
+# their length in days, and the extra error they add. A model fitted after an
+# episode starts has seen part of the new regime and keeps only a fraction of
+# the extra error.
+SHOCKS_PER_YEAR = 9
+SHOCK_DAYS = (2, 14)
+SHOCK_EXTRA_SIGMA = (2.5, 6.0)
+REFIT_SHOCK_FRACTION = 0.35
 MARKER_FILE = "SYNTHETIC_DEMO_DATA.md"
 
 
@@ -68,18 +80,46 @@ def _sigma(hours_since_fit: np.ndarray) -> np.ndarray:
 	)
 
 
+def _shock_episodes(
+	n_hours: int, rng: np.random.Generator
+) -> list[tuple[int, int, float]]:
+	"""Random (start_hour, end_hour, extra_sigma) shock episodes."""
+	count = max(1, round(SHOCKS_PER_YEAR * n_hours / (365 * 24)))
+	starts = np.sort(rng.integers(14 * 24, max(15 * 24, n_hours - 24), count))
+	return [
+		(
+			int(start),
+			int(min(n_hours, start + rng.integers(*SHOCK_DAYS) * 24)),
+			float(rng.uniform(*SHOCK_EXTRA_SIGMA)),
+		)
+		for start in starts
+	]
+
+
+def _shock_sigma(
+	hours: np.ndarray, fit_index: int, shocks: list[tuple[int, int, float]]
+) -> np.ndarray:
+	extra = np.zeros(len(hours))
+	for start, end, amount in shocks:
+		inside = (hours >= start) & (hours < end)
+		extra[inside] += amount * (REFIT_SHOCK_FRACTION if fit_index > start else 1.0)
+	return extra
+
+
 def _simulate_strategy(
 	strategy: str,
 	timestamps: pd.DatetimeIndex,
 	actual: np.ndarray,
 	shared_noise: np.ndarray,
+	shocks: list[tuple[int, int, float]],
 ) -> tuple[pd.DataFrame, list[dict]]:
 	"""Simulate one strategy day by day so decisions only see past errors.
 
 	Rolling RMSE at hour t uses errors up to t-1h (one hour of actual
 	availability lag) from the model currently serving, over at most 7 days.
 	A retraining decision at 17:00 UTC therefore never sees a future error, and
-	a refit model takes over at the next delivery day.
+	a refit model takes over at the next delivery day. Performance-triggered
+	refits need CONSECUTIVE_BREACHES daily breaches in a row.
 	"""
 	days = timestamps.normalize().unique()
 	errors = np.empty(len(timestamps))
@@ -88,11 +128,13 @@ def _simulate_strategy(
 	version = BASE_VERSIONS[strategy]
 	fit_index = 0
 	refits = 0
+	breaches = 0
 	events: list[dict] = []
 	for day in days:
 		hours = np.flatnonzero(timestamps.normalize() == day)
 		since = hours - fit_index
-		errors[hours] = _sigma(since) * shared_noise[hours]
+		sigma = _sigma(since) + _shock_sigma(hours, fit_index, shocks)
+		errors[hours] = sigma * shared_noise[hours]
 		versions[hours] = version
 		for hour in hours:
 			start = max(fit_index, hour - WINDOW_HOURS)
@@ -111,12 +153,14 @@ def _simulate_strategy(
 			retrain = next_day - fit_index >= FIXED_INTERVAL_DAYS * 24
 			reason = "fixed_schedule_interval_elapsed"
 		elif strategy == "performance_triggered":
-			retrain = bool(np.isfinite(score) and score > THRESHOLD)
+			breaches = breaches + 1 if np.isfinite(score) and score > THRESHOLD else 0
+			retrain = breaches >= CONSECUTIVE_BREACHES
 			reason = "rolling_rmse_exceeds_threshold"
 		if retrain:
 			refits += 1
 			version = f"{BASE_VERSIONS[strategy]}_refit_{refits:03d}"
 			fit_index = next_day
+			breaches = 0
 			events.append({
 				"timestamp": timestamps[decision],
 				"strategy": strategy,
@@ -150,10 +194,11 @@ def build_demo_exports(
 	# One shared standard-normal error path keeps strategies comparable: they
 	# differ only in how stale their model is, not in luck.
 	shared_noise = rng.standard_t(df=6, size=len(timestamps)) / np.sqrt(1.5)
+	shocks = _shock_episodes(len(timestamps), rng)
 	forecasts, events = [], []
 	for strategy in STRATEGIES:
 		frame, strategy_events = _simulate_strategy(
-			strategy, timestamps, actual, shared_noise
+			strategy, timestamps, actual, shared_noise, shocks
 		)
 		forecasts.append(frame)
 		events.extend(strategy_events)
