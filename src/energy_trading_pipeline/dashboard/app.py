@@ -254,7 +254,7 @@ def _render_backtest(st, exports_dir: str) -> None:
 		for row in metrics[
 			["run_id", "evaluation_start", "evaluation_end"]
 		].drop_duplicates().itertuples(index=False):
-			st.caption(
+			st.caption(""
 				# f"Stored metrics for {row.evaluation_start:%d %b %Y} to "
 				# f"{row.evaluation_end:%d %b %Y} (run {row.run_id}); the date "
 				# "filter does not change them."
